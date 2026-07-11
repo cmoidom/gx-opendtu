@@ -69,6 +69,27 @@ Deux cadences découplées, exécutées dans une seule boucle Python
 - **Décision** (`control.decision_interval_s`, défaut 5 s) : c'est le seul
   moment où des requêtes HTTP peuvent partir vers OpenDTU.
 
+**Pourquoi 5 s, et pourquoi ne pas chercher à réagir plus vite en logiciel** :
+le vrai facteur limitant n'est ni l'intervalle de décision, ni le palier
+logiciel (`step_absolute_w`/`step_relative_pct`), c'est la **rampe de
+puissance physique de l'onduleur Hoymiles lui-même** — un paramètre du profil
+réseau (grid profile), réglable uniquement via l'appli/DTU officiels
+Hoymiles, **pas via OpenDTU**. Deux sources communautaires indépendantes
+convergent sur un ordre de grandeur d'environ **0,5 %Pn/s ≈ 3 W/s** pour un
+onduleur 600 W (confiance moyenne — ça peut varier selon modèle/profil) ; un
+swing complet 0→100 % prend alors de l'ordre de ~200 s, pas 5 s. Notre palier
+logiciel par défaut (100 W ou 10 % toutes les 5 s, soit jusqu'à ~20 W/s
+autorisés) est déjà bien au-dessus de ce que l'onduleur peut physiquement
+suivre : le logiciel n'est donc jamais le goulot d'étranglement en pratique,
+et l'accélérer n'aurait aucun effet réel sur la vitesse de réaction. La
+marge `export_setpoint_w` (+30 W par défaut) absorbe sans risque le délai
+d'ajustement de production lors d'un à-coup de charge — c'est son rôle.
+Source: discussion communautaire OpenDTU-OnBattery #908 (deux mesures
+indépendantes convergentes) ; un rapport isolé (issue OpenDTU #571)
+évoquait une asymétrie montée/descente mais n'est pas corroboré et est
+probablement spécifique à une version/config particulière — à ne pas
+généraliser.
+
 À chaque cycle de décision (`SoftTargetController.compute_target`,
 `src/controller.py`) :
 

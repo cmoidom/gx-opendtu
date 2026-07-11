@@ -1,0 +1,27 @@
+{
+  "opendtu": {
+    "base_url": "http://192.168.1.50"
+  },
+  "grid": {
+    "export_setpoint_w": 30,
+    "read_interval_s": 2,
+    "smoothing_samples": 3,
+    "source": "dbus"
+  },
+  "control": {
+    "kp": 0.4,
+    "ki": 0.05,
+    "decision_interval_s": 5,
+    "step_absolute_w": 100,
+    "step_relative_pct": 10,
+    "min_change_w": 5
+  },
+  "capacity_probe": {
+    "step_w": 10,
+    "interval_s": 30
+  },
+  "inverters": [
+    { "serial": "114181801234", "nominal_power_w": 600 },
+    { "serial": "114181805678", "nominal_power_w": 380 }
+  ]
+}

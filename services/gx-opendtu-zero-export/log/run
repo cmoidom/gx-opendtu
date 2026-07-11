@@ -1,0 +1,2 @@
+#!/bin/bash
+exec svlogd -tt /var/log/gx-opendtu-zero-export

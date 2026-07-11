@@ -1,0 +1,113 @@
+from src.controller import (
+    CapacityEstimator,
+    GridPowerSmoother,
+    SoftTargetController,
+    quantize,
+    ramp_limit,
+)
+
+
+def test_grid_power_smoother_averages_last_n_samples():
+    smoother = GridPowerSmoother(samples=3)
+    smoother.add(100)
+    smoother.add(200)
+    assert smoother.add(300) == 200.0
+    # a 4th sample should push the oldest (100) out of the window
+    assert smoother.add(0) == (200 + 300 + 0) / 3
+
+
+def test_quantize_rounds_to_nearest_step():
+    assert quantize(149, 100) == 100
+    assert quantize(151, 100) == 200
+    assert quantize(0, 100) == 0
+
+
+def test_quantize_with_zero_step_is_noop():
+    assert quantize(123.4, 0) == 123.4
+
+
+def test_ramp_limit_caps_movement_per_cycle():
+    assert ramp_limit(current=100, target=1000, max_step=100) == 200
+    assert ramp_limit(current=100, target=50, max_step=100) == 50
+    assert ramp_limit(current=100, target=100, max_step=100) == 100
+
+
+def test_soft_target_controller_is_quantized_and_rate_limited():
+    controller = SoftTargetController(
+        export_setpoint_w=30,
+        kp=1.0,
+        ki=0.0,
+        step_absolute_w=100,
+        step_relative_pct=0,
+        min_change_w=5,
+    )
+    # First call always "changes" (no previous baseline) and establishes the target.
+    first = controller.compute_target(grid_power_avg_w=30, current_total_actual_w=200, total_capacity_w=1000)
+    assert first.changed is True
+    assert first.target_w == 200.0
+
+    # Small error shouldn't move the target by more than a quantized step, and
+    # shouldn't fire a change if it stays within min_change_w of last sent value.
+    second = controller.compute_target(grid_power_avg_w=32, current_total_actual_w=200, total_capacity_w=1000)
+    assert second.changed is False
+    assert second.target_w == 200.0
+
+
+def test_soft_target_controller_ramps_large_jumps_over_multiple_cycles():
+    controller = SoftTargetController(
+        export_setpoint_w=0,
+        kp=2.0,
+        ki=0.0,
+        step_absolute_w=100,
+        step_relative_pct=0,
+        min_change_w=5,
+    )
+    # Establish a baseline at 0 first.
+    first = controller.compute_target(grid_power_avg_w=0, current_total_actual_w=0, total_capacity_w=2000)
+    assert first.target_w == 0.0
+
+    # Then a big swing to heavy import (lots of headroom to raise production):
+    # the jump must be spread over several decision cycles, not applied at once.
+    second = controller.compute_target(grid_power_avg_w=1000, current_total_actual_w=0, total_capacity_w=2000)
+    assert second.target_w == 100.0  # capped to one step this cycle
+
+    third = controller.compute_target(grid_power_avg_w=1000, current_total_actual_w=0, total_capacity_w=2000)
+    assert third.target_w == 200.0  # ramps up by another step
+
+
+def test_effective_step_uses_larger_of_absolute_and_relative():
+    controller = SoftTargetController(
+        export_setpoint_w=0,
+        kp=1.0,
+        ki=0.0,
+        step_absolute_w=100,
+        step_relative_pct=10,
+        min_change_w=5,
+    )
+    # 10% of 3000W (300W) is larger than the 100W absolute floor.
+    assert controller.effective_step_w(3000) == 300.0
+    # 10% of 500W (50W) is smaller than the 100W absolute floor.
+    assert controller.effective_step_w(500) == 100.0
+
+
+def test_capacity_estimator_lowers_ceiling_when_inverter_cannot_keep_up():
+    estimator = CapacityEstimator(nominal_power_w={"a": 600}, probe_step_w=10)
+    assert estimator.ceilings_w["a"] == 600
+
+    # Allocated 400W, but only 250W actually produced, and OpenDTU confirms the
+    # limit itself isn't what's holding it back (limit_acknowledged=True at a
+    # higher value) -> assume irradiance-limited, cap drops to actual output.
+    estimator.observe("a", allocated_w=400, actual_w=250, limit_acknowledged=True)
+    assert estimator.ceilings_w["a"] == 250
+
+    # A slow probe should nudge the ceiling back up towards nominal.
+    estimator.probe_tick()
+    assert estimator.ceilings_w["a"] == 260
+    estimator.probe_tick()
+    assert estimator.ceilings_w["a"] == 270
+
+
+def test_capacity_estimator_keeps_ceiling_when_inverter_keeps_up():
+    estimator = CapacityEstimator(nominal_power_w={"a": 600}, probe_step_w=10)
+    estimator.observe("a", allocated_w=400, actual_w=400, limit_acknowledged=True)
+    assert estimator.ceilings_w["a"] == 600

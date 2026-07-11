@@ -1,0 +1,5 @@
+# Only needed when running off the Cerbo GX (grid.source = "modbus" in
+# config, e.g. deployment on a separate Linux VM). Not needed at all when
+# running directly on Venus OS with grid.source = "dbus" (uses the
+# preinstalled dbus-python instead, see src/grid_meter.py).
+pymodbus>=3.6,<4

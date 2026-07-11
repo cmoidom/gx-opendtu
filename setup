@@ -1,0 +1,31 @@
+#!/bin/bash
+# SetupHelper package installer for gx-opendtu-zero-export.
+#
+# Prerequisite: SetupHelper itself must already be installed on the Cerbo GX
+# (https://github.com/kwindrem/SetupHelper). This script follows its standard
+# package layout: version / setup / gitHubInfo / services/<name>/{run,log/run}.
+#
+# NOTE: the endScript flags below follow the documented SetupHelper
+# convention but have not been validated against a real Venus OS install as
+# part of this project -- check PackageDevelopmentGuidelines.md in the
+# SetupHelper repo against the version installed on your Cerbo GX before
+# relying on this for an unattended install. See ARCHITECTURE.md.
+
+packageName="gx-opendtu-zero-export"
+packageDir="$(cd "$(dirname "$0")" && pwd)"
+
+source "/data/SetupHelper/HelperResources/IncludeHelpers"
+
+installConfigFile () {
+    targetConfig="/data/$packageName/config/config.json"
+    if [ ! -f "$targetConfig" ]; then
+        mkdir -p "$(dirname "$targetConfig")"
+        cp "$packageDir/config/config.example.json" "$targetConfig"
+        echo "Copied config.example.json to $targetConfig"
+        echo "Edit it with your OpenDTU URL and inverter serials before the service starts producing useful output."
+    fi
+}
+
+installConfigFile
+
+endScript INSTALL_FILES INSTALL_SERVICE

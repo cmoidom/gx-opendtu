@@ -149,10 +149,12 @@ accès D-Bus local, pour un service qui tourne sur une VM séparée :
   explicite en complément à deux (`_to_signed_int16`, testée dans
   `tests/test_grid_meter_modbus.py`) — oublier cette conversion est un bug
   classique qui masquerait silencieusement les valeurs d'export (négatives).
-- L'API de `pymodbus` a changé de mot-clé pour l'unit ID entre versions
-  majeures (`unit=` en 2.x, `slave=` en 3.x) : `_read_holding_registers`
-  essaie `slave=` puis retombe sur `unit=` en cas de `TypeError`, plutôt que
-  de figer une version exacte.
+- L'API de `pymodbus` a changé **plusieurs fois** de mot-clé pour l'unit ID
+  (`unit=` en 2.x, `slave=` en 3.0-3.7ish, `device_id=` confirmé sur 3.13.1) :
+  `_read_holding_registers` essaie `device_id=`, puis `slave=`, puis `unit=`,
+  au lieu de figer une version exacte — ce point a déjà cassé une fois en
+  déploiement réel avant d'être élargi à trois variantes, voir
+  `tests/test_grid_meter_modbus.py::test_read_holding_registers_falls_back_across_pymodbus_versions`.
 - `pymodbus` n'est requis que pour ce mode (`requirements.txt`) ; l'import
   est différé à l'intérieur des méthodes, donc `grid_meter_modbus.py` reste
   importable même sans le paquet installé (utile en mode `dbus`/Cerbo GX).

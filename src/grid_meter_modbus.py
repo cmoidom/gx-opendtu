@@ -20,6 +20,8 @@ by default), and the `pymodbus` package on the machine running this module
 
 from __future__ import annotations
 
+from typing import Optional
+
 from src.grid_meter import GridMeterUnavailable
 
 SYSTEM_UNIT_ID = 100
@@ -31,13 +33,23 @@ def _to_signed_int16(raw: int) -> int:
     return raw - 65536 if raw > 32767 else raw
 
 
+# pymodbus has renamed its unit-id keyword across versions: unit= (2.x),
+# slave= (3.0-3.7ish), device_id= (3.8+, confirmed on 3.13.1). Tried in this
+# order (newest first) rather than pinning an exact version, since pinning
+# already broke once between when this was written and when it was deployed.
+_UNIT_ID_KEYWORDS = ("device_id", "slave", "unit")
+
+
 def _read_holding_registers(client, address: int, count: int, unit_id: int):
-    # pymodbus renamed its unit-id keyword across major versions (unit= in
-    # 2.x, slave= in 3.x) -- try both rather than pinning an exact version.
-    try:
-        return client.read_holding_registers(address=address, count=count, slave=unit_id)
-    except TypeError:
-        return client.read_holding_registers(address=address, count=count, unit=unit_id)
+    last_error: Optional[TypeError] = None
+    for kwarg in _UNIT_ID_KEYWORDS:
+        try:
+            return client.read_holding_registers(address=address, count=count, **{kwarg: unit_id})
+        except TypeError as exc:
+            last_error = exc
+    raise TypeError(
+        f"read_holding_registers accepts none of {_UNIT_ID_KEYWORDS} on this pymodbus version"
+    ) from last_error
 
 
 class ModbusGridMeter:

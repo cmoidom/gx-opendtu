@@ -74,7 +74,7 @@ puissance nominale de chaque onduleur, gains PI, paliers) — voir
 ```sh
 # Sur le Cerbo GX, une fois SetupHelper installé :
 cd /data
-git clone <url-de-ce-depot> gx-opendtu-zero-export
+git clone https://github.com/cmoidom/gx-opendtu.git gx-opendtu-zero-export
 cd gx-opendtu-zero-export
 ./setup
 ```
@@ -109,7 +109,7 @@ Sur la VM :
 ```sh
 sudo useradd --system --home /opt/gx-opendtu --shell /usr/sbin/nologin gx-opendtu
 sudo mkdir -p /opt/gx-opendtu /etc/gx-opendtu
-sudo git clone <url-de-ce-depot> /opt/gx-opendtu
+sudo git clone https://github.com/cmoidom/gx-opendtu.git /opt/gx-opendtu
 cd /opt/gx-opendtu
 sudo python3 -m venv .venv
 sudo ./.venv/bin/pip install -r requirements.txt

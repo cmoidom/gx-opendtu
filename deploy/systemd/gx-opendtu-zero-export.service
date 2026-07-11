@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=gx-opendtu
 WorkingDirectory=/opt/gx-opendtu
-ExecStart=/opt/gx-opendtu/.venv/bin/python3 -u /opt/gx-opendtu/src/main.py --config /etc/gx-opendtu/config.json
+ExecStart=/opt/gx-opendtu/.venv/bin/python3 -u -m src.main --config /etc/gx-opendtu/config.json
 Restart=on-failure
 RestartSec=5
 

@@ -1,3 +1,4 @@
 #!/bin/bash
 exec 2>&1
-exec python3 -u /data/gx-opendtu-zero-export/src/main.py --config /data/gx-opendtu-zero-export/config/config.json
+cd /data/gx-opendtu-zero-export
+exec python3 -u -m src.main --config /data/gx-opendtu-zero-export/config/config.json

@@ -126,8 +126,12 @@ journalctl -u gx-opendtu-zero-export -f
 
 ## Mode test (`--dry-run`)
 
+Depuis la racine du projet (important : lancer via `-m src.main`, pas
+`python3 src/main.py`, sinon les imports internes `from src...` échouent
+avec `ModuleNotFoundError: No module named 'src'`) :
+
 ```sh
-python src/main.py --config config/config.json --dry-run
+python3 -m src.main --config config/config.json --dry-run
 ```
 
 Le service tourne normalement (lecture D-Bus du compteur réseau, lecture

@@ -77,7 +77,9 @@ def _decision_cycle(
     current_total_actual_w = sum(live_power_w.get(s, 0.0) for s in serials)
     total_capacity_w = sum(capacity.ceilings_w.get(s, 0.0) for s in serials)
 
-    decision = controller.compute_target(grid_power_avg_w, current_total_actual_w, total_capacity_w)
+    decision = controller.compute_target(
+        grid_power_avg_w, current_total_actual_w, total_capacity_w, battery_power_w=battery_power_w
+    )
     allocation = water_fill_allocate(
         decision.target_w,
         serials,

@@ -95,6 +95,69 @@ def test_soft_target_controller_ramps_large_jumps_over_multiple_cycles():
     assert third.target_w == 200.0  # ramps up by another step
 
 
+def test_battery_discharge_boosts_target_when_headroom_available():
+    controller = SoftTargetController(
+        export_setpoint_w=30, kp=1.0, ki=0.0, step_absolute_w=100, step_relative_pct=0, min_change_w=5,
+    )
+    # Grid already sits at the setpoint (error=0) -- the PI alone would keep
+    # the target at current production (200W), but the battery is
+    # discharging 100W while there's plenty of capacity headroom (1000W):
+    # must boost the target to replace that discharge with production.
+    decision = controller.compute_target(
+        grid_power_avg_w=30, current_total_actual_w=200, total_capacity_w=1000, battery_power_w=-100.0
+    )
+    assert decision.target_w == 300.0  # 200 + 100 discharge, already a clean step multiple
+
+
+def test_battery_discharge_boost_clamped_to_total_capacity():
+    controller = SoftTargetController(
+        export_setpoint_w=30, kp=1.0, ki=0.0, step_absolute_w=100, step_relative_pct=0, min_change_w=5,
+    )
+    # Discharge (300W) would push the boosted target past capacity (900+300
+    # > 1000) -- clamped to total_capacity_w, i.e. "every inverter maxed
+    # out, no more sun available", exactly the case where battery discharge
+    # is meant to be accepted.
+    decision = controller.compute_target(
+        grid_power_avg_w=30, current_total_actual_w=900, total_capacity_w=1000, battery_power_w=-300.0
+    )
+    assert decision.target_w == 1000.0
+
+
+def test_battery_charging_does_not_boost_target():
+    controller = SoftTargetController(
+        export_setpoint_w=30, kp=1.0, ki=0.0, step_absolute_w=100, step_relative_pct=0, min_change_w=5,
+    )
+    decision = controller.compute_target(
+        grid_power_avg_w=30, current_total_actual_w=200, total_capacity_w=1000, battery_power_w=50.0
+    )
+    assert decision.target_w == 200.0
+
+
+def test_battery_power_omitted_behaves_like_no_battery():
+    controller = SoftTargetController(
+        export_setpoint_w=30, kp=1.0, ki=0.0, step_absolute_w=100, step_relative_pct=0, min_change_w=5,
+    )
+    decision = controller.compute_target(grid_power_avg_w=30, current_total_actual_w=200, total_capacity_w=1000)
+    assert decision.target_w == 200.0
+
+
+def test_battery_discharge_boost_does_not_pollute_pi_integral():
+    controller = SoftTargetController(
+        export_setpoint_w=0, kp=0.0, ki=1.0, step_absolute_w=50, step_relative_pct=0, min_change_w=5,
+    )
+    # Grid sits exactly at setpoint every cycle (error=0) -- ki alone
+    # contributes nothing regardless of the battery, so the integral must
+    # stay at 0 even while a large, persistent battery-discharge boost
+    # repeatedly saturates the target at total_capacity_w. A boost that
+    # leaked into self.pi.integral would wind up here and overshoot once
+    # the discharge stops (e.g. once the sun returns the next morning).
+    for _ in range(5):
+        controller.compute_target(
+            grid_power_avg_w=0, current_total_actual_w=500, total_capacity_w=500, battery_power_w=-1000.0
+        )
+    assert controller.pi.integral == 0.0
+
+
 def test_effective_step_uses_larger_of_absolute_and_relative():
     controller = SoftTargetController(
         export_setpoint_w=0,

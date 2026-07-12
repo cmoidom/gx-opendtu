@@ -252,6 +252,9 @@ delta            = PI(error)                      # kp*error + intégrale (anti-
 current_actual   = somme des puissances AC actuelles (GET /api/livedata/status)
 raw_target       = clamp(current_actual + delta, 0, capacité_totale)
 
+si battery_power_w < 0 (décharge) :                      # voir "Priorité solaire sur batterie" ci-dessous
+    raw_target = clamp(max(raw_target, current_actual + |battery_power_w|), 0, capacité_totale)
+
 step             = max(step_absolute_w, step_relative_pct% * capacité_totale)
 quantized        = round(raw_target / step) * step        # palier
 next_target      = last_sent + clamp(quantized - last_sent, -step, +step)  # rampe: 1 palier / cycle max
@@ -265,6 +268,28 @@ sinon :
 Le choix de `step = max(absolu, relatif)` garantit un palier minimal en watts
 même sur une petite installation, et un palier proportionnellement raisonnable
 sur une grosse installation (pas de spam à chaque petite variation de charge).
+
+### Priorité solaire sur batterie
+
+Le PI ci-dessus ne regarde que la puissance réseau — il peut donc être
+"satisfait" (réseau proche de `export_setpoint_w`) alors que la batterie
+comble en silence un écart que le solaire pourrait couvrir (confirmé sur
+une installation réelle : batterie à -224W de décharge, onduleurs bien en
+dessous de leur plafond de capacité, réseau pourtant proche de la
+consigne). Règle explicite de l'utilisateur : **interdit de tirer sur la
+batterie si le solaire peut fournir cette puissance à la place** — sauf si
+la consigne est déjà au maximum de la capacité disponible (plus aucun
+onduleur n'a de marge, donc plus de soleil disponible), auquel cas la
+batterie doit prendre le relais.
+
+Implémenté en plancher sur `raw_target` (pas dans l'intégrale du PI, pour
+éviter tout risque de *windup* : si le plancher sature `raw_target` à
+`capacité_totale` pendant des heures -- typiquement la nuit -- l'intégrale
+ne doit surtout pas continuer à s'accumuler, sinon elle produirait un
+dépassement une fois le soleil revenu). Le `clamp(..., 0, capacité_totale)`
+implémente naturellement l'exception : une fois tous les onduleurs déjà à
+leur plafond, le plancher ne peut plus rien élever davantage, et le reste
+de la décharge batterie est accepté sans logique séparée.
 
 ## Répartition multi-onduleurs (water-filling)
 

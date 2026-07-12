@@ -73,6 +73,11 @@ class SoftTargetController:
     The effective step is the larger of the absolute and relative step settings:
     a small install still gets a meaningful watt-sized deadband, and a large
     install doesn't get flooded with tiny percentage-sized command changes.
+
+    Also enforces: never draw from the battery while solar has headroom to
+    cover it instead -- only acceptable once every inverter is already at
+    its capacity ceiling (no more sun available). See compute_target's
+    battery_power_w handling.
     """
 
     def __init__(
@@ -97,11 +102,32 @@ class SoftTargetController:
         return max(self.step_absolute_w, relative_step)
 
     def compute_target(
-        self, grid_power_avg_w: float, current_total_actual_w: float, total_capacity_w: float
+        self,
+        grid_power_avg_w: float,
+        current_total_actual_w: float,
+        total_capacity_w: float,
+        battery_power_w: Optional[float] = None,
     ) -> "ControlDecision":
         error = grid_power_avg_w - self.export_setpoint_w
         delta = self.pi.step(error)
         raw_target = clamp(current_total_actual_w + delta, 0.0, total_capacity_w)
+
+        # Never let the battery cover a shortfall solar could cover instead:
+        # the grid-power PI above is blind to the battery entirely, so it can
+        # be "satisfied" (grid near export_setpoint_w) while the battery
+        # quietly covers a gap solar has headroom for. If discharging
+        # (negative), floor the target at whatever would fully replace that
+        # discharge with production -- clamped to total_capacity_w, so once
+        # every inverter is already maxed out (no more sun) the floor simply
+        # can't push higher and the remaining discharge is accepted, exactly
+        # as it should be. Applied to raw_target only, never to self.pi's own
+        # integral, so it can't wind up while saturated at full capacity
+        # (e.g. overnight) and overshoot once the sun returns.
+        if battery_power_w is not None and battery_power_w < 0:
+            battery_discharge_w = -battery_power_w
+            raw_target = clamp(
+                max(raw_target, current_total_actual_w + battery_discharge_w), 0.0, total_capacity_w
+            )
 
         step = self.effective_step_w(total_capacity_w)
         quantized = quantize(raw_target, step)

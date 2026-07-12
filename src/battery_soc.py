@@ -16,6 +16,7 @@ from __future__ import annotations
 
 SYSTEM_SERVICE = "com.victronenergy.system"
 SOC_PATH = "/Dc/Battery/Soc"
+POWER_PATH = "/Dc/Battery/Power"
 BUS_ITEM_IFACE = "com.victronenergy.BusItem"
 
 
@@ -34,15 +35,23 @@ class DbusBatterySoc:
             self._bus = dbus.SystemBus()
         return self._bus
 
-    def read_soc_pct(self) -> float:
+    def _read_path(self, path: str) -> float:
         import dbus
 
         bus = self._bus_instance()
         try:
-            obj = bus.get_object(SYSTEM_SERVICE, SOC_PATH)
+            obj = bus.get_object(SYSTEM_SERVICE, path)
             value = dbus.Interface(obj, BUS_ITEM_IFACE).GetValue()
         except dbus.DBusException as exc:
-            raise BatterySocUnavailable(f"failed to read {SYSTEM_SERVICE}{SOC_PATH}: {exc}") from exc
+            raise BatterySocUnavailable(f"failed to read {SYSTEM_SERVICE}{path}: {exc}") from exc
         if value is None:
-            raise BatterySocUnavailable(f"{SYSTEM_SERVICE}{SOC_PATH} is invalid (no battery data)")
+            raise BatterySocUnavailable(f"{SYSTEM_SERVICE}{path} is invalid (no battery data)")
         return float(value)
+
+    def read_soc_pct(self) -> float:
+        return self._read_path(SOC_PATH)
+
+    def read_power_w(self) -> float:
+        """Positive = charging, negative = discharging -- dashboard display only,
+        not used by the injection-control gating logic (SOC alone drives that)."""
+        return self._read_path(POWER_PATH)

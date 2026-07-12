@@ -60,8 +60,10 @@ def _decision_cycle(
     grid_power_avg_w: float,
     live_state: Optional[LiveState] = None,
     soc_pct: Optional[float] = None,
+    battery_power_w: Optional[float] = None,
     dry_run: bool = False,
     verbose_traces: bool = True,
+    min_inverter_pct: float = 0.0,
 ) -> None:
     live_power_w = client.get_live_power_w()
     limit_status = client.get_limit_status()
@@ -70,7 +72,13 @@ def _decision_cycle(
     total_capacity_w = sum(capacity.ceilings_w.get(s, 0.0) for s in serials)
 
     decision = controller.compute_target(grid_power_avg_w, current_total_actual_w, total_capacity_w)
-    allocation = water_fill_allocate(decision.target_w, serials, capacity.ceilings_w)
+    allocation = water_fill_allocate(
+        decision.target_w,
+        serials,
+        capacity.ceilings_w,
+        min_inverter_pct=min_inverter_pct,
+        nominal_power_w=capacity.nominal_power_w,
+    )
     rounded_allocation = {s: round(w) for s, w in allocation.items()}
 
     if not dry_run and decision.changed:
@@ -95,6 +103,7 @@ def _decision_cycle(
                 }
                 for serial in serials
             ],
+            battery_power_w=battery_power_w,
         )
 
     # Logs full state every cycle (not just on change) for debug visibility
@@ -229,6 +238,7 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
             last_decision_time = now
 
             soc_pct: Optional[float] = None
+            battery_power_w: Optional[float] = None
             injection_active = True
             if battery_reader is not None:
                 try:
@@ -243,13 +253,21 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
                         "battery SOC read failed, defaulting injection control to ACTIVE (safe): %s", exc
                     )
                     injection_active = True
+                try:
+                    battery_power_w = battery_reader.read_power_w()
+                except BatterySocUnavailable:
+                    battery_power_w = None  # dashboard display only, not safety-critical
 
             if not injection_active:
                 if not released_for_charging:
                     _release_for_charging(client, serials, dry_run=dry_run)
                     released_for_charging = True
                 live_state.update_decision(
-                    soc_pct, "OFF", None, _off_state_inverters_payload(client, serials, nominal_power_w)
+                    soc_pct,
+                    "OFF",
+                    None,
+                    _off_state_inverters_payload(client, serials, nominal_power_w),
+                    battery_power_w=battery_power_w,
                 )
                 if config.logging.verbose_traces:
                     log.info(
@@ -272,8 +290,10 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
                         smoother.average,
                         live_state=live_state,
                         soc_pct=soc_pct,
+                        battery_power_w=battery_power_w,
                         dry_run=dry_run,
                         verbose_traces=config.logging.verbose_traces,
+                        min_inverter_pct=config.control.min_inverter_pct,
                     )
                 except OpenDTUError as exc:
                     log.error("OpenDTU communication failed: %s", exc)

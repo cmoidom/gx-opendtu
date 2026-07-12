@@ -27,6 +27,7 @@ class LiveState:
         self._lock = threading.Lock()
         self._history: deque = deque(maxlen=max_samples)
         self._soc_pct: Optional[float] = None
+        self._battery_power_w: Optional[float] = None
         self._injection_control: Optional[str] = None
         self._consigne_w: Optional[float] = None
         self._inverters: List[dict] = []
@@ -37,11 +38,13 @@ class LiveState:
         injection_control: str,
         consigne_w: Optional[float],
         inverters: List[dict],
+        battery_power_w: Optional[float] = None,
     ) -> None:
         """Called once per decision cycle (control.decision_interval_s) --
         carried forward into every grid sample recorded until the next one."""
         with self._lock:
             self._soc_pct = soc_pct
+            self._battery_power_w = battery_power_w
             self._injection_control = injection_control
             self._consigne_w = consigne_w
             self._inverters = list(inverters)
@@ -55,6 +58,7 @@ class LiveState:
                 "grid_raw_w": grid_raw_w,
                 "grid_ema_w": grid_ema_w,
                 "soc_pct": self._soc_pct,
+                "battery_power_w": self._battery_power_w,
                 "injection_control": self._injection_control,
                 "consigne_w": self._consigne_w,
                 "inverters": self._inverters,

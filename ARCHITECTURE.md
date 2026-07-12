@@ -229,6 +229,18 @@ abaissé à sa production mesurée. Une sonde périodique
 le nominal, pour redétecter une amélioration (nuage qui passe) sans jamais le
 dépasser.
 
+`min_inverter_pct` (`config.control.min_inverter_pct`, défaut 10%) est
+appliqué en post-traitement sur le dict `allocation` retourné : pour
+chaque onduleur dont la part est `> 0` (donc censé produire, pas un arrêt
+volontaire), on relève à `min(capacity_estimates[serial], min_inverter_pct%
+* nominal_power_w[serial])` si cette part était plus basse. Le calcul est
+uniforme pour les entrées saturées comme non saturées (`min(cap, max(w,
+floor))` ne change rien pour une entrée déjà à son plafond, la clause
+`min(...)` protège juste de dépasser un plafond abaissé par l'ombrage).
+`total_target_w == 0` donne `share == 0` pour tous, donc jamais concerné --
+c'est ce qui permet au fail-safe et au déblocage à 100% de rester
+inchangés sans logique séparée.
+
 ## API OpenDTU utilisée
 
 - `GET /api/livedata/status` → puissance AC actuelle par `serial`.
@@ -299,6 +311,16 @@ vraie curtailment des micro-onduleurs pour ne jamais exporter.
   SOC agrégé système (`com.victronenergy.system` `/Dc/Battery/Soc`), même
   logique que pour la puissance réseau : correct quel que soit le nombre de
   packs/moniteurs batterie physiques, pas de lookup par installation.
+- Les deux mêmes classes exposent aussi `read_power_w()` (`/Dc/Battery/Power`,
+  registre Modbus 842 -- `int16`, W, adjacent au registre SOC sur le même
+  service, confirmé contre la liste officielle des registres Modbus-TCP
+  Victron). Convention identique à celle de Victron : positif = charge,
+  négatif = décharge. Utilisé uniquement pour l'affichage sur le
+  [tableau de bord](#tableau-de-bord-temps-réel) -- l'hystérésis ON/OFF
+  ci-dessous ne se base que sur le SOC, jamais sur cette valeur. Un échec de
+  lecture de la puissance n'affecte pas la logique de gating (juste
+  `battery_power_w=None` ce cycle-là), contrairement à un échec de lecture
+  du SOC qui bascule `injection_active` en sécurité (voir plus haut).
 - `controller.BatteryFullHysteresis` (pure, testée dans
   `tests/test_battery_hysteresis.py`) : verrou à deux seuils —
   `activate_at_pct` (défaut 100 %) pour passer en `ON`, `deactivate_below_pct`

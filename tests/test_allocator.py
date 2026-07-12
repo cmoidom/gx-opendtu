@@ -36,3 +36,31 @@ def test_missing_capacity_estimate_treated_as_unlimited():
 def test_negative_target_clamped_to_zero():
     allocation = water_fill_allocate(-50.0, ["a", "b"], {"a": 100, "b": 100})
     assert allocation == {"a": 0.0, "b": 0.0}
+
+
+def test_min_inverter_pct_floors_a_low_nonzero_share():
+    # 10W total split two ways is 5W each; a 10% floor of 600W nominal is 60W.
+    allocation = water_fill_allocate(
+        10.0, ["a", "b"], {"a": 600, "b": 600}, min_inverter_pct=10.0, nominal_power_w={"a": 600, "b": 600}
+    )
+    assert allocation == {"a": 60.0, "b": 60.0}
+
+
+def test_min_inverter_pct_never_overrides_a_genuine_zero():
+    allocation = water_fill_allocate(
+        0.0, ["a", "b"], {"a": 600, "b": 600}, min_inverter_pct=10.0, nominal_power_w={"a": 600, "b": 600}
+    )
+    assert allocation == {"a": 0.0, "b": 0.0}
+
+
+def test_min_inverter_pct_never_exceeds_capacity_ceiling():
+    # Floor would be 10% of 600 = 60W, but this inverter is shaded down to 20W -- must not exceed that.
+    allocation = water_fill_allocate(
+        5.0, ["a"], {"a": 20}, min_inverter_pct=10.0, nominal_power_w={"a": 600}
+    )
+    assert allocation == {"a": 20.0}
+
+
+def test_min_inverter_pct_disabled_by_default():
+    allocation = water_fill_allocate(10.0, ["a", "b"], {"a": 600, "b": 600})
+    assert allocation == {"a": 5.0, "b": 5.0}

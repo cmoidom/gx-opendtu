@@ -194,6 +194,11 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
     <input type="number" step="any" name="control.step_relative_pct" value="{val('control.step_relative_pct', '10')}" required>
     <label>Changement minimal (W)</label>
     <input type="number" step="any" name="control.min_change_w" value="{val('control.min_change_w', '5')}" required>
+    <label>Seuil mini onduleur (% de sa puissance nominale)</label>
+    <input type="number" step="any" min="0" max="100" name="control.min_inverter_pct" value="{val('control.min_inverter_pct', '10')}" required>
+    <p class="hint">Un onduleur qui produit n'est jamais commande sous ce seuil (certains
+    micro-onduleurs ne regulent pas de façon fiable pres de 0). Mettre 0 pour desactiver.
+    Un arret complet (fail-safe, charge batterie) n'est jamais concerne.</p>
   </fieldset>
 
   <fieldset>
@@ -389,6 +394,12 @@ def _render_dashboard_page() -> str:
 <h2>SOC batterie</h2>
 <div class="chart-box"><canvas id="chart-soc"></canvas></div>
 
+<h2>Puissance batterie</h2>
+<div class="chart-box">
+  <canvas id="chart-battery"></canvas>
+  <p class="hint">Positif = charge, negatif = decharge.</p>
+</div>
+
 <h2>Puissance reseau (brut / EMA)</h2>
 <div class="chart-box">
   <canvas id="chart-grid"></canvas>
@@ -567,9 +578,11 @@ function attachHover(canvas, opts) {
 }
 
 const chartSoc = document.getElementById('chart-soc');
+const chartBattery = document.getElementById('chart-battery');
 const chartGrid = document.getElementById('chart-grid');
 const chartInverters = document.getElementById('chart-inverters');
 attachHover(chartSoc, { yFormat: fmtPct });
+attachHover(chartBattery, { yFormat: fmtW });
 attachHover(chartGrid, { yFormat: fmtW });
 attachHover(chartInverters, { yFormat: fmtW });
 
@@ -581,6 +594,7 @@ function renderTiles(latest) {
     '<div class="tile"><div class="label">Reseau (brut)</div><div class="value">' + fmtW(latest.grid_raw_w) + '</div></div>' +
     '<div class="tile"><div class="label">Reseau (EMA)</div><div class="value">' + fmtW(latest.grid_ema_w) + '</div></div>' +
     (latest.soc_pct !== null ? '<div class="tile"><div class="label">SOC batterie</div><div class="value">' + fmtPct(latest.soc_pct) + '</div></div>' : '') +
+    (latest.battery_power_w !== null && latest.battery_power_w !== undefined ? '<div class="tile"><div class="label">Puissance batterie</div><div class="value">' + fmtW(latest.battery_power_w) + '</div></div>' : '') +
     '<div class="tile"><div class="label">Regulation</div><div class="value ' + (on ? 'on' : 'off') + '">' + (latest.injection_control || '-') + '</div></div>' +
     (on ? '<div class="tile"><div class="label">Consigne totale</div><div class="value">' + fmtW(latest.consigne_w) + '</div></div>' : '');
 }
@@ -609,6 +623,11 @@ function renderInvertersLegend() {
 function renderCharts() {
   const socPoints = history.filter(s => s.soc_pct !== null).map(s => ({ t: s.t, v: s.soc_pct }));
   drawChart(chartSoc, [{ label: 'SOC', color: cssVar('--series-1'), points: socPoints }], { yMin: 0, yMax: 100, yFormat: fmtPct });
+
+  const batteryPoints = history.filter(s => s.battery_power_w !== null && s.battery_power_w !== undefined)
+                                .map(s => ({ t: s.t, v: s.battery_power_w }));
+  drawChart(chartBattery, [{ label: 'Batterie', color: cssVar('--series-3'), points: batteryPoints }],
+    { yFormat: fmtW, includeZero: true });
 
   drawChart(chartGrid, [
     { label: 'Brut', color: cssVar('--series-1'), points: history.map(s => ({ t: s.t, v: s.grid_raw_w })) },
@@ -687,6 +706,7 @@ def _form_to_raw(form: dict) -> dict:
             "step_absolute_w": float(first("control.step_absolute_w", "100")),
             "step_relative_pct": float(first("control.step_relative_pct", "10")),
             "min_change_w": float(first("control.min_change_w", "5")),
+            "min_inverter_pct": float(first("control.min_inverter_pct", "10")),
         },
         "capacity_probe": {
             "step_w": float(first("capacity_probe.step_w", "10")),

@@ -76,6 +76,14 @@ Copier celui qui correspond, puis l'adapter (URL OpenDTU, numéros de série et
 puissance nominale de chaque onduleur, gains PI, paliers) — voir
 `ARCHITECTURE.md` pour la signification de chaque paramètre.
 
+`control.min_inverter_pct` (défaut 10%) : seuil plancher global, en % de la
+puissance nominale de chacun — un onduleur qui produit n'est jamais commandé
+sous ce seuil (certains micro-onduleurs ne régulent pas de façon fiable près
+de 0). Mettre `0` pour désactiver. N'affecte jamais un arrêt complet
+(fail-safe à 0%, ou déblocage à 100% pendant la charge batterie
+prioritaire) — seulement une part non nulle mais trop faible calculée par
+le water-filling.
+
 Pour activer la priorité de charge batterie, passer `battery.enabled` à
 `true` (désactivé par défaut, comportement inchangé sinon) :
 ```json
@@ -123,12 +131,13 @@ le port 8080 : `http://<ip-du-service>:8080/`.
 Sur le même serveur web, `http://<ip-du-service>:8080/dashboard` affiche
 l'état courant du pilotage sans avoir à lire les logs :
 
-- Tuiles : puissance réseau brute et EMA, SOC batterie (si activé), état
-  `injection_control` (ON/OFF), consigne totale.
-- Trois graphiques (mise à jour toutes les 2 s, ~30 min d'historique
+- Tuiles : puissance réseau brute et EMA, SOC et puissance batterie (si
+  activé), état `injection_control` (ON/OFF), consigne totale.
+- Quatre graphiques (mise à jour toutes les 2 s, ~30 min d'historique
   conservées en mémoire côté service — perdu à chaque redémarrage) : SOC
-  batterie, puissance réseau brute + EMA sur le même graphe, puissance
-  réelle par onduleur.
+  batterie, puissance batterie (positif = charge, négatif = décharge),
+  puissance réseau brute + EMA sur le même graphe, puissance réelle par
+  onduleur.
 - Tableau détaillé par onduleur (puissance, % de limite, puissance
   nominale, statut d'acquittement OpenDTU).
 - Aucune dépendance externe (pas de librairie de graphiques chargée depuis

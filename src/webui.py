@@ -417,6 +417,34 @@ function fmtTime(t) { return new Date(t * 1000).toLocaleTimeString(); }
 function fmtW(v) { return (v === null || v === undefined) ? '-' : Math.round(v) + ' W'; }
 function fmtPct(v) { return (v === null || v === undefined) ? '-' : Math.round(v) + ' %'; }
 
+// "Nice numbers" axis rounding (Heckbert's algorithm): picks bounds/step
+// that are always a round 1/2/5 x 10^n, so gridlines land on 50/100/200/500
+// rather than whatever the raw data range happens to divide into (49, 189).
+function niceNum(range, round) {
+  if (range <= 0) return 1;
+  const exponent = Math.floor(Math.log10(range));
+  const fraction = range / Math.pow(10, exponent);
+  let niceFraction;
+  if (round) {
+    if (fraction < 1.5) niceFraction = 1;
+    else if (fraction < 3) niceFraction = 2;
+    else if (fraction < 7) niceFraction = 5;
+    else niceFraction = 10;
+  } else {
+    if (fraction <= 1) niceFraction = 1;
+    else if (fraction <= 2) niceFraction = 2;
+    else if (fraction <= 5) niceFraction = 5;
+    else niceFraction = 10;
+  }
+  return niceFraction * Math.pow(10, exponent);
+}
+
+function niceScale(min, max, targetTicks) {
+  if (min === max) { min -= 1; max += 1; }
+  const step = niceNum((max - min) / Math.max(1, targetTicks - 1), true);
+  return { min: Math.floor(min / step) * step, max: Math.ceil(max / step) * step, step: step };
+}
+
 function drawChart(canvas, seriesList, opts) {
   opts = opts || {};
   const dpr = window.devicePixelRatio || 1;
@@ -442,14 +470,11 @@ function drawChart(canvas, seriesList, opts) {
 
   const tMin = Math.min.apply(null, allPoints.map(p => p.t));
   const tMax = Math.max.apply(null, allPoints.map(p => p.t));
-  const fixedRange = opts.yMin !== undefined && opts.yMax !== undefined;
-  let yMin = opts.yMin !== undefined ? opts.yMin : Math.min.apply(null, allPoints.map(p => p.v));
-  let yMax = opts.yMax !== undefined ? opts.yMax : Math.max.apply(null, allPoints.map(p => p.v));
-  if (yMin === yMax) { yMin -= 1; yMax += 1; }
-  if (!fixedRange) {
-    const yPad = (yMax - yMin) * 0.1;
-    yMin -= yPad; yMax += yPad;
-  }
+  let dataMin = opts.yMin !== undefined ? opts.yMin : Math.min.apply(null, allPoints.map(p => p.v));
+  let dataMax = opts.yMax !== undefined ? opts.yMax : Math.max.apply(null, allPoints.map(p => p.v));
+  if (opts.includeZero) { dataMin = Math.min(dataMin, 0); dataMax = Math.max(dataMax, 0); }
+  const scale = niceScale(dataMin, dataMax, 5);
+  const yMin = scale.min, yMax = scale.max;
 
   function xPix(t) { return padding.left + (t - tMin) / ((tMax - tMin) || 1) * plotW; }
   function yPix(v) { return padding.top + (1 - (v - yMin) / ((yMax - yMin) || 1)) * plotH; }
@@ -470,9 +495,8 @@ function drawChart(canvas, seriesList, opts) {
     ctx.fillText(label, lx, h - 5);
   }
 
-  const steps = 4;
-  for (let i = 0; i <= steps; i++) {
-    const v = yMin + (yMax - yMin) * i / steps;
+  const tickEpsilon = scale.step * 1e-6;
+  for (let v = yMin; v <= yMax + tickEpsilon; v += scale.step) {
     const y = yPix(v);
     ctx.beginPath(); ctx.moveTo(padding.left, y); ctx.lineTo(w - padding.right, y); ctx.stroke();
     ctx.fillText(opts.yFormat ? opts.yFormat(v) : Math.round(v).toString(), 2, y + 3);
@@ -577,7 +601,7 @@ function renderCharts() {
   drawChart(chartGrid, [
     { label: 'Brut', color: cssVar('--series-1'), points: history.map(s => ({ t: s.t, v: s.grid_raw_w })) },
     { label: 'EMA', color: cssVar('--series-2'), points: history.map(s => ({ t: s.t, v: s.grid_ema_w })) },
-  ], { yFormat: fmtW });
+  ], { yFormat: fmtW, includeZero: true });
 
   history.forEach(s => (s.inverters || []).forEach(inv => {
     if (!inverterOrder.includes(inv.serial)) inverterOrder.push(inv.serial);

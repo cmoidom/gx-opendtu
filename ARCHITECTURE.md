@@ -100,6 +100,14 @@ contrainte "pas d'accès internet garanti" que le reste du projet). L'état
 est perdu à chaque redémarrage du service (y compris via "Enregistrer et
 appliquer") : c'est une vue en direct, pas un historique persistant.
 
+Les graduations de l'axe Y de chaque graphique utilisent l'algorithme
+"nice numbers" de Heckbert (`niceNum`/`niceScale` dans `webui.py`) : le pas
+et les bornes sont toujours arrondis à 1/2/5 x 10^n (50, 100, 200, 500...),
+jamais des valeurs arbitraires issues de la division brute de la plage de
+données. Le graphique "Puissance réseau" force en plus `includeZero` pour
+que la ligne 0 W reste toujours visible, même quand toutes les valeurs de
+la fenêtre affichée sont positives.
+
 `config.logging.verbose_traces` (défaut `true`) ne gate que la ligne d'état
 répétée à chaque cycle de décision dans `main._decision_cycle` et dans la
 branche OFF de `main.run()` (`log.info("grid_meter=...")`) -- toujours

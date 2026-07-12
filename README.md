@@ -86,8 +86,12 @@ permet d'éditer tous les paramètres, y compris l'ajout/suppression
 d'onduleurs, sans toucher au fichier JSON à la main. Activée par défaut sur
 le port 8080 : `http://<ip-du-service>:8080/`.
 
-- Écrit `config.json` mais **ne redémarre pas le service** : redémarrez-le
-  manuellement pour appliquer les changements.
+- Deux boutons : **"Enregistrer"** écrit `config.json` sans rien redémarrer
+  (les changements ne sont pris en compte qu'au prochain redémarrage manuel).
+  **"Enregistrer et appliquer"** écrit puis redémarre le service tout de
+  suite (le pilotage est brièvement interrompu, le temps que le superviseur
+  — daemontools ou systemd — relance le process ; confirmation demandée
+  avant d'agir).
 - Aucune authentification (comme l'API OpenDTU) — accessible à quiconque sur
   le LAN.
 - Désactivable ou changement de port via `config.json` :
@@ -103,6 +107,23 @@ le port 8080 : `http://<ip-du-service>:8080/`.
   `×` sur la ligne pour retirer un onduleur déjà ajouté. Ne fonctionne que
   si OpenDTU est joignable en HTTP sans authentification depuis la machine
   qui exécute le service (pas de support Basic Auth actuellement).
+
+### Tableau de bord temps réel
+
+Sur le même serveur web, `http://<ip-du-service>:8080/dashboard` affiche
+l'état courant du pilotage sans avoir à lire les logs :
+
+- Tuiles : puissance réseau brute et EMA, SOC batterie (si activé), état
+  `injection_control` (ON/OFF), consigne totale.
+- Trois graphiques (mise à jour toutes les 2 s, ~30 min d'historique
+  conservées en mémoire côté service — perdu à chaque redémarrage) : SOC
+  batterie, puissance réseau brute + EMA sur le même graphe, puissance
+  réelle par onduleur.
+- Tableau détaillé par onduleur (puissance, % de limite, puissance
+  nominale, statut d'acquittement OpenDTU).
+- Aucune dépendance externe (pas de librairie de graphiques chargée depuis
+  un CDN — tracé en `<canvas>` HTML5 fait main), cohérent avec l'absence
+  d'accès internet garanti sur le Cerbo GX.
 
 ## Installation
 

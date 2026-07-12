@@ -17,6 +17,7 @@ from src.battery_soc import BatterySocUnavailable, DbusBatterySoc
 from src.config import AppConfig, load_config
 from src.controller import BatteryFullHysteresis, CapacityEstimator, GridPowerSmoother, SoftTargetController
 from src.grid_meter import DbusGridMeter, GridMeterUnavailable
+from src.live_state import LiveState
 from src.opendtu_client import OpenDTUClient, OpenDTUError
 
 FAILSAFE_AFTER_CONSECUTIVE_FAILURES = 3
@@ -57,6 +58,7 @@ def _decision_cycle(
     serials: Iterable[str],
     grid_power_raw_w: float,
     grid_power_avg_w: float,
+    live_state: Optional[LiveState] = None,
     soc_pct: Optional[float] = None,
     dry_run: bool = False,
 ) -> None:
@@ -73,6 +75,26 @@ def _decision_cycle(
     if not dry_run and decision.changed:
         for serial, watts in allocation.items():
             client.set_absolute_limit_w(serial, watts)
+
+    if live_state is not None:
+        live_state.update_decision(
+            soc_pct,
+            "ON",
+            decision.target_w,
+            [
+                {
+                    "serial": serial,
+                    "allocated_w": rounded_allocation.get(serial, 0),
+                    "actual_w": live_power_w.get(serial, 0.0),
+                    "limit_relative_pct": (
+                        limit_status[serial].limit_relative if serial in limit_status else None
+                    ),
+                    "max_power_w": capacity.ceilings_w.get(serial, 0.0),
+                    "acknowledged": limit_status[serial].acknowledged if serial in limit_status else None,
+                }
+                for serial in serials
+            ],
+        )
 
     # Always log full state every cycle (not just on change) for debug
     # visibility -- this only affects local logging, not OpenDTU traffic
@@ -128,7 +150,9 @@ def _apply_failsafe(client: OpenDTUClient, serials: Iterable[str], dry_run: bool
             log.error("fail-safe curtail of %s failed: %s", serial, exc)
 
 
-def run(config: AppConfig, dry_run: bool = False) -> None:
+def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState] = None) -> None:
+    if live_state is None:
+        live_state = LiveState()
     grid_reader = _make_grid_reader(config)
     battery_reader = _make_battery_reader(config)
     hysteresis = (
@@ -161,6 +185,7 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
         try:
             grid_power_w = grid_reader.read_grid_power_w()
             smoother.add(grid_power_w)
+            live_state.record_grid(grid_power_w, smoother.average)
             consecutive_grid_failures = 0
         except GridMeterUnavailable as exc:
             consecutive_grid_failures += 1
@@ -193,6 +218,7 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
                 if not released_for_charging:
                     _release_for_charging(client, serials, dry_run=dry_run)
                     released_for_charging = True
+                live_state.update_decision(soc_pct, "OFF", None, [])
                 log.info(
                     "%ssoc=%.0f%% grid_meter=%+.0fW ema=%+.0fW injection_control=OFF (charge batterie prioritaire)%s",
                     "[DRY-RUN] " if dry_run else "",
@@ -211,6 +237,7 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
                         serials,
                         grid_power_w,
                         smoother.average,
+                        live_state=live_state,
                         soc_pct=soc_pct,
                         dry_run=dry_run,
                     )
@@ -238,14 +265,15 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     config = load_config(args.config)
+    live_state = LiveState()
 
     if config.web.enabled:
         from src.webui import start_webui_server
 
-        start_webui_server(args.config, config.web.port)
+        start_webui_server(args.config, config.web.port, live_state)
         log.info("page de configuration disponible sur http://0.0.0.0:%d/", config.web.port)
 
-    run(config, dry_run=args.dry_run)
+    run(config, dry_run=args.dry_run, live_state=live_state)
 
 
 if __name__ == "__main__":

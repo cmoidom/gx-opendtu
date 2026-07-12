@@ -1,14 +1,27 @@
-"""Built-in web page for editing config.json (incl. adding/removing inverters).
+"""Built-in web pages: config editor ("/") and live dashboard ("/dashboard").
 
 Stdlib only (http.server) so it runs unmodified on Venus OS (Cerbo GX) and on
 a plain VM, no extra dependency. Started in a background thread from
 src/main.py, on config.web.port.
 
-Deliberately does NOT reload the running control loop or restart the
-service on save -- it only writes config.json. A restart is required for
-edits to take effect (see README.md). This keeps a bad edit in the web form
-from immediately disrupting a live zero-export control loop, and keeps this
-module fully decoupled from the control loop's in-memory state.
+The dashboard polls GET /status.json (incremental via ?since=<epoch>) and
+draws its charts with hand-rolled <canvas> code -- no charting library, kept
+inline, since Venus OS has no guaranteed internet access to fetch a CDN
+script from. Data comes from a shared src.live_state.LiveState instance the
+control loop (src/main.py) writes into every cycle; this module only reads
+it, never touches it otherwise.
+
+Saving ("Enregistrer") only writes config.json -- it deliberately does NOT
+reload the running control loop or restart the service, keeping a bad edit
+in the web form from immediately disrupting a live zero-export control
+loop, and keeping this module fully decoupled from the control loop's
+in-memory state. Applying ("Enregistrer et appliquer") is a separate,
+explicit action: it validates and writes the same as save, then exits the
+whole process (os._exit) so the service supervisor restarts it and it picks
+up the new config on the next load_config() call -- there is no in-process
+hot-reload. Exit code 1 is used so this also works under systemd's
+`Restart=on-failure` (see deploy/systemd/*.service), not just daemontools
+(which restarts unconditionally on any exit, see services/*).
 
 No authentication (matches the OpenDTU API's own default) -- anyone on the
 LAN that can reach this port can change the controller's configuration.
@@ -18,6 +31,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +39,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from src.config import parse_config
 from src.opendtu_client import OpenDTUClient, OpenDTUError
+
+log = logging.getLogger("gx-opendtu-zero-export")
 
 _FIELDS = [
     ("opendtu.base_url", "text", "http://192.168.1.50"),
@@ -113,12 +129,17 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
   .banner.error {{ background: #fde2e2; color: #7a1212; }}
   .banner.ok {{ background: #e2f6e2; color: #1a5c1a; }}
   button.primary {{ padding: 0.6rem 1.2rem; background: #2563eb; color: white; border: none;
-                    border-radius: 6px; cursor: pointer; font-size: 1rem; }}
+                    border-radius: 6px; cursor: pointer; font-size: 1rem; margin-right: 0.5rem; }}
+  button.apply-btn {{ background: #b45309; }}
   #add-inv-btn {{ margin-top: 0.5rem; }}
   .hint {{ color: #666; font-size: 0.82rem; margin: 0.2rem 0 0; }}
+  nav {{ margin-bottom: 1rem; font-size: 0.9rem; }}
+  nav a {{ color: #2563eb; text-decoration: none; }}
+  nav a:hover {{ text-decoration: underline; }}
 </style>
 </head>
 <body>
+<nav><a href="/">Configuration</a> &middot; <a href="/dashboard">Tableau de bord</a></nav>
 <h1>gx-opendtu - configuration</h1>
 {banner}
 <form method="post" action="/save">
@@ -212,8 +233,14 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
     <p class="hint">Necessite un redemarrage du service pour prendre effet.</p>
   </fieldset>
 
-  <button type="submit" class="primary">Enregistrer</button>
-  <p class="hint">Ecrit config.json uniquement -- redemarrez le service pour appliquer les changements.</p>
+  <button type="submit" formaction="/save" class="primary">Enregistrer</button>
+  <button type="submit" formaction="/apply" class="primary apply-btn"
+          onclick="return confirm('Enregistrer et redemarrer le service maintenant ? Le pilotage sera brievement interrompu.');">
+    Enregistrer et appliquer (redemarre le service)
+  </button>
+  <p class="hint">"Enregistrer" ecrit config.json sans redemarrer -- utile pour preparer des
+  changements sans interrompre le pilotage. "Enregistrer et appliquer" redemarre le service
+  tout de suite pour prendre en compte la nouvelle config.</p>
 </form>
 
 <script>
@@ -273,6 +300,295 @@ function fetchInverters() {{
     }})
     .catch(err => {{ status.textContent = 'Erreur: ' + err; }});
 }}
+</script>
+</body>
+</html>
+"""
+
+
+def _render_dashboard_page() -> str:
+    return """<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>gx-opendtu - tableau de bord</title>
+<style>
+  :root {
+    --surface-1: #fcfcfb; --page: #f9f9f7; --text-primary: #0b0b0b; --text-secondary: #52514e;
+    --muted: #898781; --gridline: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6; --series-2: #1baf7a; --series-3: #eda100; --series-4: #4a3aa7;
+    --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+      --muted: #898781; --gridline: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5; --series-2: #199e70; --series-3: #c98500; --series-4: #9085e9;
+      --good: #0ca30c; --warning: #fab219; --critical: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 960px; margin: 2rem auto;
+         padding: 0 1rem; color: var(--text-primary); background: var(--page); }
+  nav { margin-bottom: 1rem; font-size: 0.9rem; }
+  nav a { color: var(--series-1); text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1rem; margin: 1.6rem 0 0.5rem; }
+  .tiles { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.5rem; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+          padding: 0.6rem 0.9rem; min-width: 130px; }
+  .tile .label { color: var(--text-secondary); font-size: 0.78rem; }
+  .tile .value { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+  .tile .value.on { color: var(--good); }
+  .tile .value.off { color: var(--warning); }
+  .chart-box { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+               padding: 0.8rem; margin-bottom: 1rem; position: relative; }
+  .chart-box canvas { width: 100%; height: 200px; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.82rem; color: var(--text-secondary);
+            margin-top: 0.4rem; }
+  .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+                 margin-right: 0.35rem; vertical-align: middle; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--gridline); }
+  th { color: var(--text-secondary); font-weight: 600; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .hint { color: var(--muted); font-size: 0.82rem; }
+  #tooltip { position: fixed; display: none; background: var(--text-primary); color: var(--surface-1);
+             font-size: 0.78rem; padding: 0.35rem 0.55rem; border-radius: 6px; pointer-events: none;
+             z-index: 10; white-space: nowrap; }
+</style>
+</head>
+<body>
+<nav><a href="/">Configuration</a> &middot; <a href="/dashboard">Tableau de bord</a></nav>
+<h1>gx-opendtu - tableau de bord</h1>
+<p class="hint" id="conn-status">Connexion...</p>
+
+<div class="tiles" id="tiles"></div>
+
+<h2>SOC batterie</h2>
+<div class="chart-box"><canvas id="chart-soc"></canvas></div>
+
+<h2>Puissance reseau (brut / EMA)</h2>
+<div class="chart-box">
+  <canvas id="chart-grid"></canvas>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--series-1)"></span>Brut</span>
+    <span><span class="dot" style="background:var(--series-2)"></span>EMA (utilisee par le regulateur)</span>
+  </div>
+</div>
+
+<h2>Puissance par onduleur</h2>
+<div class="chart-box">
+  <canvas id="chart-inverters"></canvas>
+  <div class="legend" id="inverters-legend"></div>
+</div>
+
+<h2>Detail par onduleur</h2>
+<table id="inverters-table">
+  <thead><tr><th>Serie</th><th class="num">Puissance</th><th class="num">Limite</th><th class="num">Nominale</th><th>Etat</th></tr></thead>
+  <tbody></tbody>
+</table>
+<p class="hint">Vide pendant la charge batterie prioritaire (onduleurs debloques a 100%, pas de commande active).</p>
+
+<div id="tooltip"></div>
+
+<script>
+const SERIES_COLORS = ['--series-1', '--series-2', '--series-3', '--series-4'];
+const root = getComputedStyle(document.documentElement);
+function cssVar(name) { return root.getPropertyValue(name).trim(); }
+
+let lastT = 0;
+let history = [];
+const MAX_POINTS = 900;
+let inverterOrder = [];  // stable color assignment, first-seen order
+
+function fmtTime(t) { return new Date(t * 1000).toLocaleTimeString(); }
+function fmtW(v) { return (v === null || v === undefined) ? '-' : Math.round(v) + ' W'; }
+function fmtPct(v) { return (v === null || v === undefined) ? '-' : Math.round(v) + ' %'; }
+
+function drawChart(canvas, seriesList, opts) {
+  opts = opts || {};
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const padding = { left: 46, right: 8, top: 8, bottom: 18 };
+  const plotW = w - padding.left - padding.right;
+  const plotH = h - padding.top - padding.bottom;
+  const allPoints = seriesList.flatMap(s => s.points);
+
+  ctx.font = '10px system-ui';
+  if (!allPoints.length) {
+    ctx.fillStyle = cssVar('--muted');
+    ctx.fillText('en attente de donnees...', padding.left, h / 2);
+    canvas._chartData = null;
+    return;
+  }
+
+  const tMin = Math.min.apply(null, allPoints.map(p => p.t));
+  const tMax = Math.max.apply(null, allPoints.map(p => p.t));
+  const fixedRange = opts.yMin !== undefined && opts.yMax !== undefined;
+  let yMin = opts.yMin !== undefined ? opts.yMin : Math.min.apply(null, allPoints.map(p => p.v));
+  let yMax = opts.yMax !== undefined ? opts.yMax : Math.max.apply(null, allPoints.map(p => p.v));
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  if (!fixedRange) {
+    const yPad = (yMax - yMin) * 0.1;
+    yMin -= yPad; yMax += yPad;
+  }
+
+  function xPix(t) { return padding.left + (t - tMin) / ((tMax - tMin) || 1) * plotW; }
+  function yPix(v) { return padding.top + (1 - (v - yMin) / ((yMax - yMin) || 1)) * plotH; }
+
+  ctx.strokeStyle = cssVar('--gridline');
+  ctx.fillStyle = cssVar('--muted');
+  ctx.lineWidth = 1;
+  const steps = 4;
+  for (let i = 0; i <= steps; i++) {
+    const v = yMin + (yMax - yMin) * i / steps;
+    const y = yPix(v);
+    ctx.beginPath(); ctx.moveTo(padding.left, y); ctx.lineTo(w - padding.right, y); ctx.stroke();
+    ctx.fillText(opts.yFormat ? opts.yFormat(v) : Math.round(v).toString(), 2, y + 3);
+  }
+
+  if (yMin < 0 && yMax > 0) {
+    ctx.strokeStyle = cssVar('--baseline');
+    const y0 = yPix(0);
+    ctx.beginPath(); ctx.moveTo(padding.left, y0); ctx.lineTo(w - padding.right, y0); ctx.stroke();
+  }
+
+  seriesList.forEach(s => {
+    if (!s.points.length) return;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    let started = false;
+    let prevT = null;
+    s.points.forEach(p => {
+      const gap = prevT !== null && (p.t - prevT) > 60;  // don't connect across long OFF-state gaps
+      const x = xPix(p.t), y = yPix(p.v);
+      if (!started || gap) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+      prevT = p.t;
+    });
+    ctx.stroke();
+  });
+
+  canvas._chartData = { seriesList, tMin, tMax, yMin, yMax, padding, plotW, plotH, yFormat: opts.yFormat };
+}
+
+function attachHover(canvas, opts) {
+  const tooltip = document.getElementById('tooltip');
+  canvas.addEventListener('mousemove', (ev) => {
+    const data = canvas._chartData;
+    if (!data) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    if (x < data.padding.left) { tooltip.style.display = 'none'; return; }
+    const t = data.tMin + (x - data.padding.left) / data.plotW * (data.tMax - data.tMin);
+    const lines = [];
+    data.seriesList.forEach(s => {
+      if (!s.points.length) return;
+      let nearest = s.points[0], best = Math.abs(nearest.t - t);
+      s.points.forEach(p => { const d = Math.abs(p.t - t); if (d < best) { best = d; nearest = p; } });
+      if (Math.abs(nearest.t - t) < (data.tMax - data.tMin) / 20 || s.points.length < 5) {
+        const val = data.yFormat ? data.yFormat(nearest.v) : Math.round(nearest.v);
+        lines.push(s.label + ': ' + val);
+      }
+    });
+    if (!lines.length) { tooltip.style.display = 'none'; return; }
+    tooltip.style.display = 'block';
+    tooltip.style.left = (ev.clientX + 12) + 'px';
+    tooltip.style.top = (ev.clientY - 10) + 'px';
+    tooltip.innerHTML = '<div>' + fmtTime(t) + '</div>' + lines.map(l => '<div>' + l + '</div>').join('');
+  });
+  canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+}
+
+const chartSoc = document.getElementById('chart-soc');
+const chartGrid = document.getElementById('chart-grid');
+const chartInverters = document.getElementById('chart-inverters');
+attachHover(chartSoc, { yFormat: fmtPct });
+attachHover(chartGrid, { yFormat: fmtW });
+attachHover(chartInverters, { yFormat: fmtW });
+
+function renderTiles(latest) {
+  const tiles = document.getElementById('tiles');
+  if (!latest) { tiles.innerHTML = ''; return; }
+  const on = latest.injection_control === 'ON';
+  tiles.innerHTML =
+    '<div class="tile"><div class="label">Reseau (brut)</div><div class="value">' + fmtW(latest.grid_raw_w) + '</div></div>' +
+    '<div class="tile"><div class="label">Reseau (EMA)</div><div class="value">' + fmtW(latest.grid_ema_w) + '</div></div>' +
+    (latest.soc_pct !== null ? '<div class="tile"><div class="label">SOC batterie</div><div class="value">' + fmtPct(latest.soc_pct) + '</div></div>' : '') +
+    '<div class="tile"><div class="label">Regulation</div><div class="value ' + (on ? 'on' : 'off') + '">' + (latest.injection_control || '-') + '</div></div>' +
+    (on ? '<div class="tile"><div class="label">Consigne totale</div><div class="value">' + fmtW(latest.consigne_w) + '</div></div>' : '');
+}
+
+function renderInverterTable(latest) {
+  const tbody = document.querySelector('#inverters-table tbody');
+  const inverters = (latest && latest.inverters) || [];
+  if (!inverters.length) { tbody.innerHTML = '<tr><td colspan="5" class="hint">aucune donnee</td></tr>'; return; }
+  tbody.innerHTML = inverters.map(inv =>
+    '<tr><td>' + inv.serial + '</td>' +
+    '<td class="num">' + fmtW(inv.actual_w) + '</td>' +
+    '<td class="num">' + fmtPct(inv.limit_relative_pct) + '</td>' +
+    '<td class="num">' + fmtW(inv.max_power_w) + '</td>' +
+    '<td>' + (inv.acknowledged === false ? 'en attente (RF)' : 'ok') + '</td></tr>'
+  ).join('');
+}
+
+function renderInvertersLegend() {
+  const legend = document.getElementById('inverters-legend');
+  legend.innerHTML = inverterOrder.map((serial, i) =>
+    '<span><span class="dot" style="background:' + cssVar(SERIES_COLORS[i % SERIES_COLORS.length]) + '"></span>' + serial + '</span>'
+  ).join('');
+}
+
+function renderCharts() {
+  const socPoints = history.filter(s => s.soc_pct !== null).map(s => ({ t: s.t, v: s.soc_pct }));
+  drawChart(chartSoc, [{ label: 'SOC', color: cssVar('--series-1'), points: socPoints }], { yMin: 0, yMax: 100, yFormat: fmtPct });
+
+  drawChart(chartGrid, [
+    { label: 'Brut', color: cssVar('--series-1'), points: history.map(s => ({ t: s.t, v: s.grid_raw_w })) },
+    { label: 'EMA', color: cssVar('--series-2'), points: history.map(s => ({ t: s.t, v: s.grid_ema_w })) },
+  ], { yFormat: fmtW });
+
+  history.forEach(s => (s.inverters || []).forEach(inv => {
+    if (!inverterOrder.includes(inv.serial)) inverterOrder.push(inv.serial);
+  }));
+  const invSeries = inverterOrder.map((serial, i) => ({
+    label: serial,
+    color: cssVar(SERIES_COLORS[i % SERIES_COLORS.length]),
+    points: history.filter(s => (s.inverters || []).some(inv => inv.serial === serial))
+                   .map(s => ({ t: s.t, v: s.inverters.find(inv => inv.serial === serial).actual_w })),
+  }));
+  drawChart(chartInverters, invSeries, { yFormat: fmtW });
+  renderInvertersLegend();
+}
+
+function poll() {
+  fetch('/status.json?since=' + lastT)
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('conn-status').textContent = 'Connecte -- mise a jour toutes les 2s';
+      if (data.history.length) {
+        history.push.apply(history, data.history);
+        if (history.length > MAX_POINTS) history.splice(0, history.length - MAX_POINTS);
+        lastT = data.history[data.history.length - 1].t;
+      }
+      renderTiles(data.latest);
+      renderInverterTable(data.latest);
+      renderCharts();
+    })
+    .catch(() => { document.getElementById('conn-status').textContent = 'Connexion perdue, nouvel essai...'; });
+}
+
+window.addEventListener('resize', renderCharts);
+poll();
+setInterval(poll, 2000);
 </script>
 </body>
 </html>
@@ -341,7 +657,7 @@ def _write_raw(config_path: str, raw: dict) -> None:
     os.replace(tmp_path, config_path)
 
 
-def _make_handler(config_path: str):
+def _make_handler(config_path: str, live_state):
     class ConfigHandler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # noqa: A003 - quiet down default per-request stderr logging
             pass
@@ -367,10 +683,23 @@ def _make_handler(config_path: str):
             if parsed.path == "/fetch-inverters":
                 self._handle_fetch_inverters(parse_qs(parsed.query))
                 return
+            if parsed.path == "/status.json":
+                self._handle_status(parse_qs(parsed.query))
+                return
+            if parsed.path == "/dashboard":
+                self._send_html(_render_dashboard_page())
+                return
             if parsed.path not in ("/", "/index.html"):
                 self.send_error(404)
                 return
             self._send_html(_render_page(_load_raw(config_path)))
+
+        def _handle_status(self, query: dict) -> None:
+            try:
+                since = float((query.get("since") or ["0"])[0])
+            except ValueError:
+                since = 0.0
+            self._send_json(live_state.snapshot_since(since))
 
         def _handle_fetch_inverters(self, query: dict) -> None:
             base_url = (query.get("base_url") or [""])[0].strip()
@@ -393,7 +722,7 @@ def _make_handler(config_path: str):
             )
 
         def do_POST(self) -> None:  # noqa: N802 - required BaseHTTPRequestHandler method name
-            if self.path != "/save":
+            if self.path not in ("/save", "/apply"):
                 self.send_error(404)
                 return
             length = int(self.headers.get("Content-Length", 0))
@@ -409,6 +738,22 @@ def _make_handler(config_path: str):
                 self._send_html(_render_page(raw, error=str(exc)), status=400)
                 return
 
+            if self.path == "/apply":
+                self._send_html(
+                    _render_page(
+                        raw, message="Configuration enregistree, redemarrage du service en cours..."
+                    )
+                )
+                log.warning(
+                    "redemarrage demande via la page de configuration (bouton appliquer) -- "
+                    "le superviseur du service va le relancer"
+                )
+                # Delayed so the response above has time to flush to the client's
+                # socket before the process exits; os._exit skips normal Python
+                # cleanup/socket shutdown, which could otherwise truncate it.
+                threading.Timer(0.5, os._exit, args=(1,)).start()
+                return
+
             self._send_html(
                 _render_page(raw, message="Configuration enregistree. Redemarrez le service pour l'appliquer.")
             )
@@ -416,8 +761,8 @@ def _make_handler(config_path: str):
     return ConfigHandler
 
 
-def start_webui_server(config_path: str, port: int) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("0.0.0.0", port), _make_handler(config_path))
+def start_webui_server(config_path: str, port: int, live_state) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(("0.0.0.0", port), _make_handler(config_path, live_state))
     thread = threading.Thread(target=server.serve_forever, name="gx-opendtu-webui", daemon=True)
     thread.start()
     return server

@@ -34,7 +34,8 @@ gx-opendtu/
 │   ├── opendtu_client.py   client HTTP OpenDTU (urllib stdlib, zéro dépendance)
 │   ├── controller.py       PI + lissage + quantification + rampe + capacité + hystérésis batterie
 │   ├── allocator.py        répartition water-filling multi-onduleurs (pure)
-│   └── webui.py            page web d'édition de config.json (http.server stdlib, thread)
+│   ├── live_state.py       LiveState: buffer circulaire en mémoire pour le tableau de bord
+│   └── webui.py            pages web config ("/") et tableau de bord ("/dashboard")
 ├── config/config.example.json           déploiement Cerbo GX (grid.source=dbus)
 ├── config/config.example.vm-modbus.json déploiement VM (grid.source=modbus)
 ├── deploy/systemd/gx-opendtu-zero-export.service   service pour VM Linux
@@ -63,6 +64,16 @@ choix de ne rien recharger à chaud (voir README, section configuration).
 Pas d'authentification (comme l'API OpenDTU) : accessible à quiconque sur le
 LAN.
 
+"Enregistrer et appliquer" (`POST /apply`) valide et écrit la config comme
+`/save`, puis appelle `os._exit(1)` (via un `threading.Timer` de 0.5 s pour
+laisser la réponse HTTP partir avant que le process ne meure) : pas de
+hot-reload en mémoire, on relance tout le process et on laisse le
+superviseur (`services/` daemontools sur le Cerbo GX, `deploy/systemd/`
+ailleurs) le redémarrer avec la nouvelle config au prochain `load_config()`.
+Code de sortie 1 (pas 0) pour rester compatible avec `Restart=on-failure`
+dans le fichier systemd fourni — daemontools redémarre de toute façon quel
+que soit le code de sortie.
+
 Le bouton de découverte des onduleurs appelle `GET /fetch-inverters?base_url=...`
 côté serveur webui (pas d'appel direct navigateur → OpenDTU, donc pas de
 souci CORS), qui délègue à `OpenDTUClient.list_inverters()`
@@ -73,6 +84,21 @@ lecture ne nécessitent pas d'authentification par défaut sur OpenDTU ; si
 l'option "Disable readonly access" est activée côté OpenDTU, la découverte
 échoue (pas de support Basic Auth actuellement, ni dans `webui.py` ni dans
 `opendtu_client.py`).
+
+`live_state.py` (`LiveState`) est un buffer circulaire thread-safe
+(`collections.deque`, ~900 échantillons par défaut, soit environ 30 min au
+`grid.read_interval_s` par défaut de 2s) rempli par `main.run()` à chaque
+tick de la boucle rapide (`record_grid`, toujours) et à chaque cycle de
+décision (`update_decision`, soc/injection_control/consigne/onduleurs,
+reporté sur chaque échantillon rapide jusqu'au prochain cycle de décision).
+`webui.py` le lit seulement, jamais ne le modifie -- expose
+`GET /status.json?since=<epoch>` (récupération incrémentale : historique
+complet si `since` omis/0, sinon seulement les échantillons plus récents) et
+la page `/dashboard`, qui interroge cet endpoint toutes les 2s et dessine
+trois graphiques en `<canvas>` fait main (pas de librairie -- même
+contrainte "pas d'accès internet garanti" que le reste du projet). L'état
+est perdu à chaque redémarrage du service (y compris via "Enregistrer et
+appliquer") : c'est une vue en direct, pas un historique persistant.
 
 ## Convention de signe
 

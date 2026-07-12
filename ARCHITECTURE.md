@@ -285,6 +285,18 @@ abaissé à sa production mesurée. Une sonde périodique
 le nominal, pour redétecter une amélioration (nuage qui passe) sans jamais le
 dépasser.
 
+Ce jugement "limité par l'irradiance" n'est appliqué que si la part allouée
+était déjà **proche du plafond actuel** (`>= NEAR_CEILING_RATIO`, 90%, de
+`ceilings_w[serial]`) -- confirmé nécessaire contre une installation réelle
+qui s'est mise à produire ~5-8% de sa puissance nominale par onduleur sans
+aucun ombrage réel. Cause : la consigne zero-export vise rarement le
+maximum physique (juste assez pour couvrir la charge sans exporter), donc
+la part allouée à un onduleur est souvent bien inférieure à son plafond ;
+sans ce garde-fou, un simple bruit de mesure (production réelle légèrement
+sous une part déjà modeste) faisait dégringoler le plafond en plein soleil,
+et la remontée lente (`probe_tick`) ne compensait jamais assez vite --
+la batterie comblait l'écart à la place du solaire.
+
 `min_inverter_pct` (`config.control.min_inverter_pct`, défaut 10%) est
 appliqué en post-traitement sur le dict `allocation` retourné : pour
 chaque onduleur ayant une capacité réelle (`capacity_estimates[serial] > 0`

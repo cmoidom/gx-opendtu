@@ -114,10 +114,11 @@ def test_capacity_estimator_lowers_ceiling_when_inverter_cannot_keep_up():
     estimator = CapacityEstimator(nominal_power_w={"a": 600}, probe_step_w=10)
     assert estimator.ceilings_w["a"] == 600
 
-    # Allocated 400W, but only 250W actually produced, and OpenDTU confirms the
+    # Allocated 550W (near the 600W ceiling -- we were actually testing the
+    # limit), but only 250W actually produced, and OpenDTU confirms the
     # limit itself isn't what's holding it back (limit_acknowledged=True at a
     # higher value) -> assume irradiance-limited, cap drops to actual output.
-    estimator.observe("a", allocated_w=400, actual_w=250, limit_acknowledged=True)
+    estimator.observe("a", allocated_w=550, actual_w=250, limit_acknowledged=True)
     assert estimator.ceilings_w["a"] == 250
 
     # A slow probe should nudge the ceiling back up towards nominal.
@@ -131,3 +132,24 @@ def test_capacity_estimator_keeps_ceiling_when_inverter_keeps_up():
     estimator = CapacityEstimator(nominal_power_w={"a": 600}, probe_step_w=10)
     estimator.observe("a", allocated_w=400, actual_w=400, limit_acknowledged=True)
     assert estimator.ceilings_w["a"] == 600
+
+
+def test_capacity_estimator_ignores_shortfall_when_target_was_not_near_ceiling():
+    # The zero-export target is often well below any inverter's real max on
+    # purpose -- a small shortfall against a modest allocated share (here
+    # 400W out of a 600W ceiling, 67%) is ordinary noise, not proof the
+    # inverter can't do more. Must NOT collapse the ceiling.
+    estimator = CapacityEstimator(nominal_power_w={"a": 600}, probe_step_w=10)
+    estimator.observe("a", allocated_w=400, actual_w=380, limit_acknowledged=True)
+    assert estimator.ceilings_w["a"] == 600
+
+
+def test_capacity_estimator_near_ceiling_threshold_is_90_percent():
+    estimator = CapacityEstimator(nominal_power_w={"a": 600}, probe_step_w=10)
+    # 89% of the 600W ceiling: just under the threshold -> ignored.
+    estimator.observe("a", allocated_w=534, actual_w=500, limit_acknowledged=True)
+    assert estimator.ceilings_w["a"] == 600
+
+    # 90% of the current (still 600W) ceiling: at the threshold -> counts.
+    estimator.observe("a", allocated_w=540, actual_w=500, limit_acknowledged=True)
+    assert estimator.ceilings_w["a"] == 500

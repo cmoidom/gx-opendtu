@@ -133,7 +133,20 @@ class CapacityEstimator:
     still-limiting), it's assumed to be irradiance-limited, and its ceiling is
     lowered to its actual measured output. A slow periodic probe nudges the
     ceiling back up so a passing cloud doesn't permanently cap the inverter.
+
+    Only treats underperformance as evidence of a genuine capacity limit when
+    the allocated share was already close to the current ceiling
+    (>= NEAR_CEILING_RATIO of it) -- the zero-export target is often well
+    below any inverter's max on purpose (just enough to cover load without
+    exporting), so a small shortfall against a much lower allocated share
+    proves nothing about true capacity. Without this guard, ordinary
+    measurement noise ratchets the ceiling down under full sun too (probe_tick
+    recovery is comparatively slow, so a false positive here is costly) --
+    confirmed against a live install stuck producing ~5-8% of nominal per
+    inverter with no real shading.
     """
+
+    NEAR_CEILING_RATIO = 0.9
 
     def __init__(self, nominal_power_w: Dict[str, float], probe_step_w: float):
         self.nominal_power_w = dict(nominal_power_w)
@@ -142,10 +155,12 @@ class CapacityEstimator:
 
     def observe(self, serial: str, allocated_w: float, actual_w: float, limit_acknowledged: bool) -> None:
         nominal = self.nominal_power_w.get(serial, actual_w)
-        if limit_acknowledged and actual_w < allocated_w - 1e-6:
+        current_ceiling = self.ceilings_w.get(serial, nominal)
+        was_near_ceiling = allocated_w >= self.NEAR_CEILING_RATIO * current_ceiling
+        if limit_acknowledged and was_near_ceiling and actual_w < allocated_w - 1e-6:
             self.ceilings_w[serial] = max(0.0, actual_w)
         else:
-            self.ceilings_w[serial] = min(nominal, self.ceilings_w.get(serial, nominal))
+            self.ceilings_w[serial] = min(nominal, current_ceiling)
 
     def probe_tick(self) -> None:
         for serial, nominal in self.nominal_power_w.items():

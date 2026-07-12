@@ -79,11 +79,21 @@ côté serveur webui (pas d'appel direct navigateur → OpenDTU, donc pas de
 souci CORS), qui délègue à `OpenDTUClient.list_inverters()`
 (`src/opendtu_client.py`) : combine `/api/livedata/status` (serial, name) et
 `/api/limit/status` (max_power) — il n'existe pas d'endpoint
-`/api/inverter/list` dans le firmware OpenDTU standard. Ces deux endpoints en
-lecture ne nécessitent pas d'authentification par défaut sur OpenDTU ; si
-l'option "Disable readonly access" est activée côté OpenDTU, la découverte
-échoue (pas de support Basic Auth actuellement, ni dans `webui.py` ni dans
-`opendtu_client.py`).
+`/api/inverter/list` dans le firmware OpenDTU standard. Identifiant/mot de
+passe actuellement saisis dans le formulaire (section OpenDTU) sont passés
+en query string à `GET /fetch-inverters` puis à `OpenDTUClient`, comme pour
+`opendtu.base_url` -- avant sauvegarde, donc.
+
+`OpenDTUClient` (`src/opendtu_client.py`) envoie un en-tête
+`Authorization: Basic ...` sur **chaque** requête (GET et POST) dès que
+`username` est renseigné (`password` optionnel, chaîne vide sinon) --
+OpenDTU ignore simplement cet en-tête sur les endpoints qui n'en ont pas
+besoin, donc pas de branchement par endpoint. Nécessaire dès que
+`/api/limit/config` (écriture, "Settings API" côté OpenDTU) exige une
+authentification -- ce qui est courant même quand les endpoints de lecture
+(`/api/livedata/status`, `/api/limit/status`) n'en demandent pas. Sans ces
+identifiants dans ce cas, toute écriture échoue en 401 -- y compris le
+repli fail-safe, qui ne peut alors plus curtailer les onduleurs.
 
 `live_state.py` (`LiveState`) est un buffer circulaire thread-safe
 (`collections.deque`, ~900 échantillons par défaut, soit environ 30 min au
@@ -348,8 +358,6 @@ HTTP réel) qui vérifie qu'aucun appel d'écriture ne part en mode dry-run.
 
 ## Limites connues / non couvert
 
-- Pas de gestion Basic Auth côté client OpenDTU (non nécessaire pour
-  l'instant, l'API est ouverte sur le réseau local).
 - `src/grid_meter.py` importe `dbus` en différé (à l'intérieur des fonctions,
   pas au niveau module) précisément pour que `src.main` reste importable sur
   une machine de dev sans `dbus-python`, ce qui permet de tester

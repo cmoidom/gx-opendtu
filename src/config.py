@@ -10,6 +10,11 @@ from typing import Optional
 @dataclass
 class OpenDTUConfig:
     base_url: str
+    # Only needed if OpenDTU's write endpoints require Basic Auth (default
+    # username is "admin", set in OpenDTU's own Security settings) -- the
+    # read-only API works without these on a default OpenDTU install.
+    username: Optional[str] = None
+    password: Optional[str] = None
 
 
 @dataclass
@@ -143,8 +148,13 @@ def parse_config(raw: dict) -> AppConfig:
             unit_id=int(modbus_raw.get("unit_id", 100)),
         )
 
+    opendtu_raw = raw["opendtu"]
     return AppConfig(
-        opendtu=OpenDTUConfig(base_url=raw["opendtu"]["base_url"].rstrip("/")),
+        opendtu=OpenDTUConfig(
+            base_url=opendtu_raw["base_url"].rstrip("/"),
+            username=opendtu_raw.get("username") or None,
+            password=opendtu_raw.get("password") or None,
+        ),
         grid=GridConfig(
             export_setpoint_w=float(grid_raw.get("export_setpoint_w", 30.0)),
             read_interval_s=float(grid_raw.get("read_interval_s", 2.0)),

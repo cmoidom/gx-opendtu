@@ -47,9 +47,12 @@ code par un agent IA.
 
 - Compteur réseau Victron reconnu nativement (`com.victronenergy.grid.*` sur
   D-Bus) — installation **monophasée**.
-- OpenDTU déjà flashé et configuré, joignable en HTTP sur le réseau local,
-  API sans authentification (ou à adapter si Basic Auth activée — non
-  implémenté actuellement, voir `src/opendtu_client.py`).
+- OpenDTU déjà flashé et configuré, joignable en HTTP sur le réseau local.
+  Si l'API OpenDTU exige une authentification (Basic Auth, souvent
+  utilisateur `admin`), renseigner `opendtu.username`/`opendtu.password` en
+  config (ou via la page de configuration) — sans ça, `POST
+  /api/limit/config` échoue en `401 Unauthorized` et le contrôleur ne peut
+  **plus limiter les onduleurs, y compris le repli fail-safe**.
 
 Selon le mode de déploiement choisi :
 
@@ -104,9 +107,9 @@ le port 8080 : `http://<ip-du-service>:8080/`.
   (nom, numéro de série, puissance nominale) sous forme de case à cocher.
   Cocher un onduleur l'ajoute à la liste gérée avec sa puissance nominale
   pré-remplie (modifiable) ; décocher ne retire rien — utiliser le bouton
-  `×` sur la ligne pour retirer un onduleur déjà ajouté. Ne fonctionne que
-  si OpenDTU est joignable en HTTP sans authentification depuis la machine
-  qui exécute le service (pas de support Basic Auth actuellement).
+  `×` sur la ligne pour retirer un onduleur déjà ajouté. Utilise
+  identifiant/mot de passe actuellement saisis dans le formulaire (section
+  OpenDTU) si renseignés.
 - Case **"Tracer l'état complet à chaque cycle"** (section Journalisation) :
   active par défaut, désactivable une fois que le
   [tableau de bord](#tableau-de-bord-temps-réel) suffit à suivre le

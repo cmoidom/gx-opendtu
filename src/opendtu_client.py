@@ -5,12 +5,13 @@ Uses only the stdlib (urllib) so nothing needs to be installed on Venus OS.
 
 from __future__ import annotations
 
+import base64
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # limit_type values, see OpenDTU ActivePowerControlCommand.h. Persistent
 # variants write to inverter flash and are deliberately not exposed here -
@@ -49,14 +50,34 @@ def _extract_value(node) -> float:
 
 
 class OpenDTUClient:
-    def __init__(self, base_url: str, timeout_s: float = 5.0):
+    def __init__(
+        self,
+        base_url: str,
+        timeout_s: float = 5.0,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        # OpenDTU's write endpoints (/api/limit/config) require HTTP Basic
+        # Auth by default even when the read-only API isn't protected --
+        # sent on every request regardless of path, since OpenDTU simply
+        # ignores it on endpoints that don't require it.
+        self._auth_header: Optional[str] = None
+        if username:
+            token = base64.b64encode(f"{username}:{password or ''}".encode("utf-8")).decode("ascii")
+            self._auth_header = f"Basic {token}"
+
+    def _request(self, url: str, data: Optional[bytes] = None, method: Optional[str] = None):
+        req = urllib.request.Request(url, data=data, method=method)
+        if self._auth_header:
+            req.add_header("Authorization", self._auth_header)
+        return urllib.request.urlopen(req, timeout=self.timeout_s)
 
     def _get(self, path: str) -> dict:
         url = f"{self.base_url}{path}"
         try:
-            with urllib.request.urlopen(url, timeout=self.timeout_s) as resp:
+            with self._request(url) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             raise OpenDTUError(f"GET {url} failed: {exc}") from exc
@@ -64,9 +85,8 @@ class OpenDTUClient:
     def _post(self, path: str, payload: dict) -> dict:
         url = f"{self.base_url}{path}"
         body = urllib.parse.urlencode({"data": json.dumps(payload)}).encode("utf-8")
-        req = urllib.request.Request(url, data=body, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+            with self._request(url, data=body, method="POST") as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             raise OpenDTUError(f"POST {url} failed: {exc}") from exc

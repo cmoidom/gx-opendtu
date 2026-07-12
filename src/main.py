@@ -188,7 +188,9 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
         if battery_reader is not None
         else None
     )
-    client = OpenDTUClient(config.opendtu.base_url)
+    client = OpenDTUClient(
+        config.opendtu.base_url, username=config.opendtu.username, password=config.opendtu.password
+    )
     smoother = GridPowerSmoother(config.grid.ema_alpha)
     controller = SoftTargetController(
         export_setpoint_w=config.grid.export_setpoint_w,

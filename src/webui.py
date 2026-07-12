@@ -148,6 +148,13 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
     <legend>OpenDTU</legend>
     <label>URL de base OpenDTU</label>
     <input type="text" name="opendtu.base_url" value="{val('opendtu.base_url')}" required>
+    <label>Nom d'utilisateur (si Basic Auth activee sur OpenDTU)</label>
+    <input type="text" name="opendtu.username" value="{val('opendtu.username')}" autocomplete="off">
+    <label>Mot de passe</label>
+    <input type="password" name="opendtu.password" value="{val('opendtu.password')}" autocomplete="off">
+    <p class="hint">Necessaire uniquement si OpenDTU renvoie "401 Unauthorized" (visible dans les
+    logs) -- laisser vide sinon. Sans authentification, le controleur ne peut pas limiter les
+    onduleurs, y compris le repli fail-safe.</p>
   </fieldset>
 
   <fieldset>
@@ -272,11 +279,14 @@ function existingSerials() {{
 
 function fetchInverters() {{
   const baseUrl = document.querySelector('input[name="opendtu.base_url"]').value.trim();
+  const username = document.querySelector('input[name="opendtu.username"]').value.trim();
+  const password = document.querySelector('input[name="opendtu.password"]').value;
   const status = document.getElementById('fetch-status');
   const list = document.getElementById('discovered-list');
   status.textContent = 'Chargement...';
   list.innerHTML = '';
-  fetch('/fetch-inverters?base_url=' + encodeURIComponent(baseUrl))
+  const params = new URLSearchParams({{ base_url: baseUrl, username: username, password: password }});
+  fetch('/fetch-inverters?' + params.toString())
     .then(r => r.json())
     .then(data => {{
       if (data.error) {{ status.textContent = 'Erreur: ' + data.error; return; }}
@@ -659,7 +669,11 @@ def _form_to_raw(form: dict) -> dict:
         inverters.append({"serial": serial, "nominal_power_w": float(power)})
 
     raw = {
-        "opendtu": {"base_url": first("opendtu.base_url").strip()},
+        "opendtu": {
+            "base_url": first("opendtu.base_url").strip(),
+            "username": first("opendtu.username").strip() or None,
+            "password": first("opendtu.password") or None,
+        },
         "grid": {
             "export_setpoint_w": float(first("grid.export_setpoint_w", "30")),
             "read_interval_s": float(first("grid.read_interval_s", "2")),
@@ -758,7 +772,9 @@ def _make_handler(config_path: str, live_state):
             if not base_url:
                 self._send_json({"error": "URL OpenDTU manquante"}, status=400)
                 return
-            client = OpenDTUClient(base_url, timeout_s=5.0)
+            username = (query.get("username") or [""])[0].strip() or None
+            password = (query.get("password") or [""])[0] or None
+            client = OpenDTUClient(base_url, timeout_s=5.0, username=username, password=password)
             try:
                 inverters = client.list_inverters()
             except OpenDTUError as exc:

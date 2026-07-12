@@ -80,6 +80,17 @@ class WebConfig:
 
 
 @dataclass
+class LoggingConfig:
+    # Gates only the per-cycle state line ("grid_meter=... injection_control=...")
+    # logged every decision cycle whether or not anything changed -- errors,
+    # warnings and one-off actions (fail-safe, release for charging, restart
+    # requests) always log regardless of this setting. Defaults to True
+    # (unchanged behaviour); turn off once the web dashboard (/dashboard)
+    # covers what you'd otherwise be tailing logs for.
+    verbose_traces: bool = True
+
+
+@dataclass
 class AppConfig:
     opendtu: OpenDTUConfig
     grid: GridConfig
@@ -87,6 +98,7 @@ class AppConfig:
     capacity_probe: CapacityProbeConfig
     battery: BatteryConfig = field(default_factory=BatteryConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
     inverters: list[InverterConfig] = field(default_factory=list)
 
     @property
@@ -115,6 +127,7 @@ def parse_config(raw: dict) -> AppConfig:
     probe_raw = raw.get("capacity_probe", {})
     battery_raw = raw.get("battery", {})
     web_raw = raw.get("web", {})
+    logging_raw = raw.get("logging", {})
 
     grid_source = grid_raw.get("source", "dbus")
     if grid_source not in ("dbus", "modbus"):
@@ -159,6 +172,9 @@ def parse_config(raw: dict) -> AppConfig:
         web=WebConfig(
             enabled=bool(web_raw.get("enabled", True)),
             port=int(web_raw.get("port", 8080)),
+        ),
+        logging=LoggingConfig(
+            verbose_traces=bool(logging_raw.get("verbose_traces", True)),
         ),
         inverters=inverters,
     )

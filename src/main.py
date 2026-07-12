@@ -61,6 +61,7 @@ def _decision_cycle(
     live_state: Optional[LiveState] = None,
     soc_pct: Optional[float] = None,
     dry_run: bool = False,
+    verbose_traces: bool = True,
 ) -> None:
     live_power_w = client.get_live_power_w()
     limit_status = client.get_limit_status()
@@ -96,23 +97,25 @@ def _decision_cycle(
             ],
         )
 
-    # Always log full state every cycle (not just on change) for debug
-    # visibility -- this only affects local logging, not OpenDTU traffic
-    # (still gated by decision.changed above), so it doesn't undo the
-    # rate-limiting the soft controller is there for.
-    soc_str = f" soc={soc_pct:.0f}%" if soc_pct is not None else ""
-    log.info(
-        "%sgrid_meter=%+.0fW ema=%+.0fW opendtu_actual=%.0fW%s injection_control=ON consigne=%.0fW allocation=%s changed=%s%s",
-        "[DRY-RUN] " if dry_run else "",
-        grid_power_raw_w,
-        grid_power_avg_w,
-        current_total_actual_w,
-        soc_str,
-        decision.target_w,
-        rounded_allocation,
-        decision.changed,
-        " (rien envoye)" if dry_run else "",
-    )
+    # Logs full state every cycle (not just on change) for debug visibility
+    # when verbose_traces is on -- this only affects local logging, not
+    # OpenDTU traffic (still gated by decision.changed above), so it doesn't
+    # undo the rate-limiting the soft controller is there for. Independent
+    # of the /dashboard live view (src/live_state.py), which always updates.
+    if verbose_traces:
+        soc_str = f" soc={soc_pct:.0f}%" if soc_pct is not None else ""
+        log.info(
+            "%sgrid_meter=%+.0fW ema=%+.0fW opendtu_actual=%.0fW%s injection_control=ON consigne=%.0fW allocation=%s changed=%s%s",
+            "[DRY-RUN] " if dry_run else "",
+            grid_power_raw_w,
+            grid_power_avg_w,
+            current_total_actual_w,
+            soc_str,
+            decision.target_w,
+            rounded_allocation,
+            decision.changed,
+            " (rien envoye)" if dry_run else "",
+        )
 
     for serial in serials:
         status = limit_status.get(serial)
@@ -219,14 +222,15 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
                     _release_for_charging(client, serials, dry_run=dry_run)
                     released_for_charging = True
                 live_state.update_decision(soc_pct, "OFF", None, [])
-                log.info(
-                    "%ssoc=%.0f%% grid_meter=%+.0fW ema=%+.0fW injection_control=OFF (charge batterie prioritaire)%s",
-                    "[DRY-RUN] " if dry_run else "",
-                    soc_pct if soc_pct is not None else float("nan"),
-                    grid_power_w,
-                    smoother.average,
-                    " (rien envoye)" if dry_run else "",
-                )
+                if config.logging.verbose_traces:
+                    log.info(
+                        "%ssoc=%.0f%% grid_meter=%+.0fW ema=%+.0fW injection_control=OFF (charge batterie prioritaire)%s",
+                        "[DRY-RUN] " if dry_run else "",
+                        soc_pct if soc_pct is not None else float("nan"),
+                        grid_power_w,
+                        smoother.average,
+                        " (rien envoye)" if dry_run else "",
+                    )
             else:
                 released_for_charging = False
                 try:
@@ -240,6 +244,7 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
                         live_state=live_state,
                         soc_pct=soc_pct,
                         dry_run=dry_run,
+                        verbose_traces=config.logging.verbose_traces,
                     )
                 except OpenDTUError as exc:
                     log.error("OpenDTU communication failed: %s", exc)

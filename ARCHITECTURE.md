@@ -100,6 +100,14 @@ contrainte "pas d'accès internet garanti" que le reste du projet). L'état
 est perdu à chaque redémarrage du service (y compris via "Enregistrer et
 appliquer") : c'est une vue en direct, pas un historique persistant.
 
+`config.logging.verbose_traces` (défaut `true`) ne gate que la ligne d'état
+répétée à chaque cycle de décision dans `main._decision_cycle` et dans la
+branche OFF de `main.run()` (`log.info("grid_meter=...")`) -- toujours
+indépendante de `LiveState`, qui est mis à jour dans les deux cas quel que
+soit ce réglage. Les logs d'erreur/avertissement et les actions ponctuelles
+(fail-safe, déblocage charge batterie, redémarrage via "Enregistrer et
+appliquer") ne sont jamais concernés par ce réglage.
+
 ## Convention de signe
 
 `/Ac/Power` du compteur réseau : **positif = soutirage réseau (import),

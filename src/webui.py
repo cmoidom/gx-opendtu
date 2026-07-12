@@ -233,6 +233,16 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
     <p class="hint">Necessite un redemarrage du service pour prendre effet.</p>
   </fieldset>
 
+  <fieldset>
+    <legend>Journalisation (logging)</legend>
+    <label><input type="checkbox" name="logging.verbose_traces"
+      {"checked" if _dig(raw, "logging.verbose_traces", True) else ""}> Tracer l'etat complet a chaque cycle</label>
+    <p class="hint">Ligne "grid_meter=... injection_control=..." loggee a chaque cycle de decision,
+    changement ou non. Desactiver si le <a href="/dashboard">tableau de bord</a> suffit --
+    les erreurs et actions (fail-safe, deblocage charge batterie, redemarrage) restent
+    tracees dans tous les cas.</p>
+  </fieldset>
+
   <button type="submit" formaction="/save" class="primary">Enregistrer</button>
   <button type="submit" formaction="/apply" class="primary apply-btn"
           onclick="return confirm('Enregistrer et redemarrer le service maintenant ? Le pilotage sera brievement interrompu.');">
@@ -417,7 +427,7 @@ function drawChart(canvas, seriesList, opts) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const padding = { left: 46, right: 8, top: 8, bottom: 18 };
+  const padding = { left: 46, right: 8, top: 8, bottom: 20 };
   const plotW = w - padding.left - padding.right;
   const plotH = h - padding.top - padding.bottom;
   const allPoints = seriesList.flatMap(s => s.points);
@@ -447,6 +457,19 @@ function drawChart(canvas, seriesList, opts) {
   ctx.strokeStyle = cssVar('--gridline');
   ctx.fillStyle = cssVar('--muted');
   ctx.lineWidth = 1;
+
+  // X axis (time) ticks -- one label per ~90px of plot width, 2 to 6 ticks.
+  const xSteps = Math.min(6, Math.max(2, Math.round(plotW / 90)));
+  for (let i = 0; i <= xSteps; i++) {
+    const t = tMin + (tMax - tMin) * i / xSteps;
+    const x = xPix(t);
+    ctx.beginPath(); ctx.moveTo(x, padding.top); ctx.lineTo(x, h - padding.bottom); ctx.stroke();
+    const label = new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const textWidth = ctx.measureText(label).width;
+    const lx = Math.max(padding.left, Math.min(w - padding.right - textWidth, x - textWidth / 2));
+    ctx.fillText(label, lx, h - 5);
+  }
+
   const steps = 4;
   for (let i = 0; i <= steps; i++) {
     const v = yMin + (yMax - yMin) * i / steps;
@@ -637,6 +660,9 @@ def _form_to_raw(form: dict) -> dict:
         "web": {
             "enabled": "web.enabled" in form,
             "port": int(float(first("web.port", "8080"))),
+        },
+        "logging": {
+            "verbose_traces": "logging.verbose_traces" in form,
         },
         "inverters": inverters,
     }

@@ -102,3 +102,47 @@ def test_normal_release_for_charging_unlocks_every_inverter_to_100():
     client = FakeOpenDTUClient(live_power_w={}, limit_status={})
     _release_for_charging(client, ["a", "b"], dry_run=False)
     assert client.relative_calls == [("a", 100), ("b", 100)]
+
+
+def test_verbose_traces_true_logs_state_line(caplog):
+    client = FakeOpenDTUClient(
+        live_power_w={"a": 200.0, "b": 150.0},
+        limit_status={
+            "a": LimitStatus(limit_relative=100, max_power=600, limit_set_status="Ok"),
+            "b": LimitStatus(limit_relative=100, max_power=400, limit_set_status="Ok"),
+        },
+    )
+    with caplog.at_level("INFO"):
+        _decision_cycle(
+            client,
+            _make_controller(),
+            _make_capacity(),
+            ["a", "b"],
+            grid_power_raw_w=100.0,
+            grid_power_avg_w=100.0,
+            dry_run=True,
+            verbose_traces=True,
+        )
+    assert any("grid_meter=" in r.message for r in caplog.records)
+
+
+def test_verbose_traces_false_suppresses_state_line(caplog):
+    client = FakeOpenDTUClient(
+        live_power_w={"a": 200.0, "b": 150.0},
+        limit_status={
+            "a": LimitStatus(limit_relative=100, max_power=600, limit_set_status="Ok"),
+            "b": LimitStatus(limit_relative=100, max_power=400, limit_set_status="Ok"),
+        },
+    )
+    with caplog.at_level("INFO"):
+        _decision_cycle(
+            client,
+            _make_controller(),
+            _make_capacity(),
+            ["a", "b"],
+            grid_power_raw_w=100.0,
+            grid_power_avg_w=100.0,
+            dry_run=True,
+            verbose_traces=False,
+        )
+    assert not any("grid_meter=" in r.message for r in caplog.records)

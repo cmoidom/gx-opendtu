@@ -107,6 +107,13 @@ le port 8080 : `http://<ip-du-service>:8080/`.
   `×` sur la ligne pour retirer un onduleur déjà ajouté. Ne fonctionne que
   si OpenDTU est joignable en HTTP sans authentification depuis la machine
   qui exécute le service (pas de support Basic Auth actuellement).
+- Case **"Tracer l'état complet à chaque cycle"** (section Journalisation) :
+  active par défaut, désactivable une fois que le
+  [tableau de bord](#tableau-de-bord-temps-réel) suffit à suivre le
+  pilotage. Ne coupe que la ligne d'état répétée à chaque cycle
+  (`grid_meter=... injection_control=...`) — les erreurs et actions
+  (fail-safe, déblocage charge batterie, redémarrage) restent tracées dans
+  tous les cas.
 
 ### Tableau de bord temps réel
 

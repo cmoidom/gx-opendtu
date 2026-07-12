@@ -889,6 +889,7 @@ function renderTiles(latest) {
     '<div class="tile"><div class="label">Reseau (EMA)</div><div class="value">' + fmtW(latest.grid_ema_w) + '</div></div>' +
     (latest.soc_pct !== null ? '<div class="tile"><div class="label">SOC batterie</div><div class="value">' + fmtPct(latest.soc_pct) + '</div></div>' : '') +
     (latest.battery_power_w !== null && latest.battery_power_w !== undefined ? '<div class="tile"><div class="label">Puissance batterie</div><div class="value">' + fmtW(latest.battery_power_w) + '</div></div>' : '') +
+    ((latest.inverters && latest.inverters.length) ? '<div class="tile"><div class="label">Puissance solaire (total)</div><div class="value">' + fmtW(latest.inverters.reduce((sum, inv) => sum + (inv.actual_w || 0), 0)) + '</div></div>' : '') +
     '<div class="tile"><div class="label">Regulation</div><div class="value ' + (on ? 'on' : 'off') + '">' + (latest.injection_control || '-') + '</div></div>' +
     (on ? '<div class="tile"><div class="label">Consigne totale</div><div class="value">' + fmtW(latest.consigne_w) + '</div></div>' : '');
 

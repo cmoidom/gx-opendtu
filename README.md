@@ -164,7 +164,8 @@ l'état courant du pilotage sans avoir à lire les logs :
     pour la charge batterie reste prioritaire), et le fail-safe (perte du
     compteur réseau) reste toujours prioritaire sur ces deux contrôles.
 - Tuiles : puissance réseau brute et EMA, SOC et puissance batterie (si
-  activé), état `injection_control` (ON/OFF), consigne totale.
+  activé), puissance solaire totale (somme de `actual_w` de tous les
+  onduleurs gérés), état `injection_control` (ON/OFF), consigne totale.
 - Trois graphiques (mise à jour toutes les 2 s, ~30 min d'historique
   conservées en mémoire côté service — perdu à chaque redémarrage) : SOC
   batterie ; puissance réseau brute + EMA et puissance batterie sur le même

@@ -1,41 +1,69 @@
 from src.allocator import water_fill_allocate
 
 
-def test_equal_split_when_all_have_headroom():
-    allocation = water_fill_allocate(600.0, ["a", "b", "c"], {"a": 600, "b": 600, "c": 600})
+def test_equal_split_when_nominal_powers_are_equal():
+    allocation = water_fill_allocate(
+        600.0, ["a", "b", "c"], {"a": 600, "b": 600, "c": 600}, nominal_power_w={"a": 600, "b": 600, "c": 600}
+    )
     assert allocation == {"a": 200.0, "b": 200.0, "c": 200.0}
 
 
+def test_splits_by_percentage_of_nominal_not_equal_watts():
+    # a (400W nominal) and b (1000W nominal), both fully available. An
+    # equal-WATTS split would give both 325W (81% of a's rating, only 32.5%
+    # of b's) -- equalizing by percentage instead gives both the same
+    # fraction of their own rating.
+    allocation = water_fill_allocate(
+        650.0, ["a", "b"], {"a": 400, "b": 1000}, nominal_power_w={"a": 400, "b": 1000}
+    )
+    assert round(allocation["a"], 2) == 185.71
+    assert round(allocation["b"], 2) == 464.29
+    # both land on the same percentage of their own nominal power
+    assert round(allocation["a"] / 400 * 100, 1) == round(allocation["b"] / 1000 * 100, 1)
+
+
 def test_saturated_inverter_gets_capped_and_rest_redistributed():
-    # "a" can only give 50W; the other 550W target should be split between b and c.
-    allocation = water_fill_allocate(600.0, ["a", "b", "c"], {"a": 50, "b": 600, "c": 600})
+    # "a" can only give 50W (heavily shaded); the other 550W target is
+    # redistributed between b and c, which have equal nominal power so end
+    # up with equal watts.
+    allocation = water_fill_allocate(
+        600.0, ["a", "b", "c"], {"a": 50, "b": 600, "c": 600}, nominal_power_w={"a": 600, "b": 600, "c": 600}
+    )
     assert allocation["a"] == 50.0
     assert allocation["b"] == 275.0
     assert allocation["c"] == 275.0
 
 
 def test_cascading_saturation():
-    # a and b are both capacity-limited below their equal share, c absorbs the rest.
-    allocation = water_fill_allocate(300.0, ["a", "b", "c"], {"a": 10, "b": 20, "c": 1000})
+    # a and b are both capacity-limited well below their fair share, c (same
+    # 1000W nominal as a and b) absorbs the rest.
+    allocation = water_fill_allocate(
+        300.0, ["a", "b", "c"], {"a": 10, "b": 20, "c": 1000}, nominal_power_w={"a": 1000, "b": 1000, "c": 1000}
+    )
     assert allocation["a"] == 10.0
     assert allocation["b"] == 20.0
     assert allocation["c"] == 270.0
 
 
 def test_zero_target_gives_zero_to_all():
-    allocation = water_fill_allocate(0.0, ["a", "b"], {"a": 100, "b": 100})
+    allocation = water_fill_allocate(0.0, ["a", "b"], {"a": 100, "b": 100}, nominal_power_w={"a": 100, "b": 100})
     assert allocation == {"a": 0.0, "b": 0.0}
 
 
 def test_missing_capacity_estimate_treated_as_unlimited():
-    allocation = water_fill_allocate(100.0, ["a", "b"], {"a": 10})
+    allocation = water_fill_allocate(100.0, ["a", "b"], {"a": 10}, nominal_power_w={"a": 100, "b": 100})
     assert allocation["a"] == 10.0
     assert allocation["b"] == 90.0
 
 
 def test_negative_target_clamped_to_zero():
-    allocation = water_fill_allocate(-50.0, ["a", "b"], {"a": 100, "b": 100})
+    allocation = water_fill_allocate(-50.0, ["a", "b"], {"a": 100, "b": 100}, nominal_power_w={"a": 100, "b": 100})
     assert allocation == {"a": 0.0, "b": 0.0}
+
+
+def test_missing_nominal_power_for_all_active_falls_back_to_equal_watts():
+    allocation = water_fill_allocate(100.0, ["a", "b"], {"a": 1000, "b": 1000}, nominal_power_w={})
+    assert allocation == {"a": 50.0, "b": 50.0}
 
 
 def test_min_inverter_pct_floors_a_low_nonzero_share():
@@ -77,5 +105,5 @@ def test_min_inverter_pct_never_exceeds_capacity_ceiling():
 
 
 def test_min_inverter_pct_disabled_by_default():
-    allocation = water_fill_allocate(10.0, ["a", "b"], {"a": 600, "b": 600})
+    allocation = water_fill_allocate(10.0, ["a", "b"], {"a": 600, "b": 600}, nominal_power_w={"a": 600, "b": 600})
     assert allocation == {"a": 5.0, "b": 5.0}

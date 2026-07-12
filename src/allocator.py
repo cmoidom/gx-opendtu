@@ -1,13 +1,23 @@
 """Water-filling distribution of a total power target across several inverters.
 
-Splits the total equally, but caps any inverter at its known capacity ceiling
-(nominal power, or a lower value if it's currently irradiance-limited) and
-redistributes the remainder equally among the inverters that still have room.
+Equalizes by **percentage of each inverter's own nominal power**, not equal
+absolute watts -- so reducing the total curtails the inverter currently
+producing the highest % of its own rating first (and, symmetrically,
+raising the total favours whichever is producing the lowest % first),
+converging every inverter toward the same percentage. An inverter unable to
+reach that common percentage (irradiance-limited) is capped at its actual
+capacity, and the shortfall is redistributed among the rest by recomputing
+a new common percentage over them.
+
+Explicit user requirement (2026-07-12): a bigger inverter shouldn't be left
+producing more absolute watts than a smaller one just because an equal-watts
+split doesn't account for their different ratings -- curtailment/relief
+should track how "maxed out" each inverter already is relative to itself.
 """
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable
 
 INFINITE = float("inf")
 
@@ -16,19 +26,28 @@ def water_fill_allocate(
     total_target_w: float,
     serials: Iterable[str],
     capacity_estimates: Dict[str, float],
+    nominal_power_w: Dict[str, float],
     min_inverter_pct: float = 0.0,
-    nominal_power_w: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     active = list(serials)
     remaining = max(0.0, total_target_w)
     allocation: Dict[str, float] = {}
 
     while active:
-        share = remaining / len(active)
-        saturated = [s for s in active if capacity_estimates.get(s, INFINITE) <= share]
+        total_nominal_active = sum(nominal_power_w.get(s, 0.0) for s in active)
+        if total_nominal_active > 0:
+            share_pct = remaining / total_nominal_active
+            shares = {s: share_pct * nominal_power_w.get(s, 0.0) for s in active}
+        else:
+            # No nominal-power data for any remaining inverter -- fall back
+            # to an equal-watts split so this still terminates sensibly
+            # rather than dividing by zero.
+            equal_share = remaining / len(active)
+            shares = {s: equal_share for s in active}
+
+        saturated = [s for s in active if capacity_estimates.get(s, INFINITE) <= shares[s]]
         if not saturated:
-            for s in active:
-                allocation[s] = share
+            allocation.update(shares)
             break
         for s in saturated:
             cap = max(0.0, capacity_estimates.get(s, INFINITE))
@@ -51,7 +70,7 @@ def water_fill_allocate(
     # e.g. actually irradiance-limited to zero) is never floored above 0 --
     # fail-safe and the battery-charge-priority release don't go through
     # this function at all, so there's no other "genuine zero" to protect.
-    if min_inverter_pct > 0 and nominal_power_w:
+    if min_inverter_pct > 0:
         for s in list(allocation.keys()):
             cap = capacity_estimates.get(s, INFINITE)
             if cap <= 0:

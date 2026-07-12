@@ -27,9 +27,13 @@ code par un agent IA.
    (100 W ou 10 % du parc, la plus grande des deux), limitée en rampe à un
    palier par cycle de décision — asservissement doux, peu de requêtes HTTP.
 3. **Répartition** (`src/allocator.py`) : la puissance cible totale est
-   répartie de façon égalitaire entre les onduleurs, avec redistribution
-   automatique (water-filling) quand un onduleur ne peut pas suivre sa part
-   (ombre, sous-production).
+   répartie entre les onduleurs en égalisant le **% de la puissance
+   nominale de chacun** (pas les watts absolus — un onduleur plus gros
+   n'est pas laissé à produire plus juste parce qu'il est plus gros),
+   avec redistribution automatique (water-filling) quand un onduleur ne
+   peut pas suivre sa part (ombre, sous-production) : la part qu'il ne
+   peut pas fournir est reportée sur les autres, qui convergent alors
+   vers un nouveau % commun plus élevé.
 4. **Commande** (`src/opendtu_client.py`) : écriture des limites via
    `POST /api/limit/config` (types non-persistants uniquement, pas d'usure
    flash), lecture via `GET /api/livedata/status` et `GET /api/limit/status`.
@@ -76,8 +80,10 @@ Copier celui qui correspond, puis l'adapter (URL OpenDTU, numéros de série et
 puissance nominale de chaque onduleur, gains PI, paliers) — voir
 `ARCHITECTURE.md` pour la signification de chaque paramètre.
 
-`control.min_inverter_pct` (défaut 10%) : seuil plancher global, en % de la
-puissance nominale de chacun — un onduleur qui a de la capacité réelle
+`control.min_inverter_pct` (défaut 5%) : seuil plancher **par onduleur**
+(pas à confondre avec `control.step_relative_pct`, qui lui s'applique au
+total agrégé de tous les onduleurs), en % de la puissance nominale de
+chacun — un onduleur qui a de la capacité réelle
 disponible (du soleil) n'est jamais commandé sous ce seuil, même si le
 régulateur PI calcule une consigne totale de 0W (typiquement quand le
 réseau exporte déjà légèrement sans l'aide de ces onduleurs). Mettre `0`

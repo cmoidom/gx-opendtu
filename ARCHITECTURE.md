@@ -293,12 +293,30 @@ de la décharge batterie est accepté sans logique séparée.
 
 ## Répartition multi-onduleurs (water-filling)
 
-`allocator.water_fill_allocate(total_target_w, serials, capacity_estimates)` :
-répartition égalitaire, plafonnée par la capacité connue de chaque onduleur,
-avec redistribution itérative du surplus tant qu'il reste des onduleurs non
-saturés. Complexité O(n²) dans le pire cas (n = nombre d'onduleurs, en
-pratique très petit), un onduleur au moins sort de la boucle à chaque
-itération donc pas de risque de boucle infinie.
+`allocator.water_fill_allocate(total_target_w, serials, capacity_estimates,
+nominal_power_w)` : répartition égalitaire **en % de la puissance nominale
+de chacun**, pas en Watts absolus -- `nominal_power_w` est donc un paramètre
+requis, pas juste une donnée pour le plancher `min_inverter_pct`. Un
+onduleur plafonné par sa capacité connue est capé à sa capacité réelle, et
+le surplus est redistribué itérativement sur les onduleurs restants (on
+recalcule un nouveau pourcentage commun sur eux). Complexité O(n²) dans le
+pire cas (n = nombre d'onduleurs, en pratique très petit), un onduleur au
+moins sort de la boucle à chaque itération donc pas de risque de boucle
+infinie.
+
+**Pourquoi le %, pas les Watts** (exigence explicite, 2026-07-12) : avec un
+partage en Watts absolus, réduire ou augmenter la production totale change
+chaque onduleur du même nombre de Watts, indépendamment de sa puissance
+nominale -- un petit onduleur de 400W à 87% de son propre maximum et un
+grand de 1000W à 50% du sien recevraient pourtant la même variation en
+Watts. En %, ils convergent vers le **même pourcentage de leur propre
+nominal** : baisser la consigne totale réduit d'abord (proportionnellement
+plus) celui qui était déjà le plus haut en %, et l'augmenter favorise
+d'abord celui qui était le plus bas en % -- symétrique dans les deux sens,
+par construction de l'algorithme (pas une règle de priorité codée à part).
+Exemple : cible 650W sur deux onduleurs de 400W et 1000W nominaux (tous
+deux disponibles sans ombrage) → 185,7W (46,4% de 400) et 464,3W (46,4% de
+1000), pas 325W chacun.
 
 `capacity_estimates` (`CapacityEstimator`, `src/controller.py`) démarre à la
 puissance nominale déclarée en config. Si un onduleur reste durablement
@@ -322,9 +340,11 @@ sous une part déjà modeste) faisait dégringoler le plafond en plein soleil,
 et la remontée lente (`probe_tick`) ne compensait jamais assez vite --
 la batterie comblait l'écart à la place du solaire.
 
-`min_inverter_pct` (`config.control.min_inverter_pct`, défaut 10%) est
-appliqué en post-traitement sur le dict `allocation` retourné : pour
-chaque onduleur ayant une capacité réelle (`capacity_estimates[serial] > 0`
+`min_inverter_pct` (`config.control.min_inverter_pct`, défaut 5%,
+**par onduleur** -- pas à confondre avec `control.step_relative_pct`, qui
+lui s'applique au total agrégé, voir plus bas) est appliqué en
+post-traitement sur le dict `allocation` retourné : pour chaque onduleur
+ayant une capacité réelle (`capacity_estimates[serial] > 0`
 -- donc pas nuit/ombrage total), on relève à `min(capacity_estimates[serial],
 min_inverter_pct% * nominal_power_w[serial])` si sa part calculée était
 plus basse -- **y compris quand cette part est exactement 0**, tant qu'il y

@@ -59,7 +59,7 @@ class ControlConfig:
     # that's producing at all is never asked for less than this (some
     # micro-inverters don't regulate reliably near zero). 0 disables it --
     # a genuine 0 target (fail-safe, full curtailment) is never affected.
-    min_inverter_pct: float = 10.0
+    min_inverter_pct: float = 5.0
 
 
 @dataclass
@@ -197,7 +197,7 @@ def parse_config(raw: dict) -> AppConfig:
             step_absolute_w=float(control_raw.get("step_absolute_w", 100.0)),
             step_relative_pct=float(control_raw.get("step_relative_pct", 10.0)),
             min_change_w=float(control_raw.get("min_change_w", 5.0)),
-            min_inverter_pct=float(control_raw.get("min_inverter_pct", 10.0)),
+            min_inverter_pct=float(control_raw.get("min_inverter_pct", 5.0)),
         ),
         capacity_probe=CapacityProbeConfig(
             step_w=float(probe_raw.get("step_w", 10.0)),

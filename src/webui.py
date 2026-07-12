@@ -198,7 +198,7 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
     <label>Changement minimal (W)</label>
     <input type="number" step="any" name="control.min_change_w" value="{val('control.min_change_w', '5')}" required>
     <label>Seuil mini onduleur (% de sa puissance nominale)</label>
-    <input type="number" step="any" min="0" max="100" name="control.min_inverter_pct" value="{val('control.min_inverter_pct', '10')}" required>
+    <input type="number" step="any" min="0" max="100" name="control.min_inverter_pct" value="{val('control.min_inverter_pct', '5')}" required>
     <p class="hint">Un onduleur qui produit n'est jamais commande sous ce seuil (certains
     micro-onduleurs ne regulent pas de façon fiable pres de 0). Mettre 0 pour desactiver.
     Un arret complet (fail-safe, charge batterie) n'est jamais concerne.</p>
@@ -1031,7 +1031,7 @@ def _form_to_raw(form: dict) -> dict:
             "step_absolute_w": float(first("control.step_absolute_w", "100")),
             "step_relative_pct": float(first("control.step_relative_pct", "10")),
             "min_change_w": float(first("control.min_change_w", "5")),
-            "min_inverter_pct": float(first("control.min_inverter_pct", "10")),
+            "min_inverter_pct": float(first("control.min_inverter_pct", "5")),
         },
         "capacity_probe": {
             "step_w": float(first("capacity_probe.step_w", "10")),

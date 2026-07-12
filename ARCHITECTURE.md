@@ -29,8 +29,10 @@ gx-opendtu/
 │   ├── config.py           chargement + validation config JSON (dataclasses)
 │   ├── grid_meter.py       DbusGridMeter: D-Bus com.victronenergy.grid.*  /Ac/Power
 │   ├── grid_meter_modbus.py ModbusGridMeter: Modbus TCP, unit ID 100, registre 820
+│   ├── battery_soc.py      DbusBatterySoc: D-Bus com.victronenergy.system /Dc/Battery/Soc
+│   ├── battery_soc_modbus.py ModbusBatterySoc: Modbus TCP, unit ID 100, registre 843
 │   ├── opendtu_client.py   client HTTP OpenDTU (urllib stdlib, zéro dépendance)
-│   ├── controller.py       PI + lissage + quantification + rampe + capacité
+│   ├── controller.py       PI + lissage + quantification + rampe + capacité + hystérésis batterie
 │   └── allocator.py        répartition water-filling multi-onduleurs (pure)
 ├── config/config.example.json           déploiement Cerbo GX (grid.source=dbus)
 ├── config/config.example.vm-modbus.json déploiement VM (grid.source=modbus)
@@ -188,6 +190,45 @@ accès D-Bus local, pour un service qui tourne sur une VM séparée :
   libre" sans supervision active de la puissance réseau.
 - La marge de sécurité `export_setpoint_w` (> 0) garantit que le point de
   fonctionnement visé reste toujours légèrement côté import, jamais export.
+
+## Priorité charge batterie (hystérésis, optionnel)
+
+Motivation : tant que la batterie n'est pas pleine, le surplus PV AC-couplé
+(Hoymiles) peut être absorbé par le chargeur de batterie de l'ESS Victron
+(Multiplus/Quattro) sans que ce projet ait besoin de brider quoi que ce soit
+— seul le cas "batterie pleine" (plus de sink pour le surplus) exige une
+vraie curtailment des micro-onduleurs pour ne jamais exporter.
+
+- `src/battery_soc.py` (D-Bus) / `src/battery_soc_modbus.py` (Modbus TCP,
+  registre 843, `uint16`, échelle 1, pas de conversion de signe) lisent le
+  SOC agrégé système (`com.victronenergy.system` `/Dc/Battery/Soc`), même
+  logique que pour la puissance réseau : correct quel que soit le nombre de
+  packs/moniteurs batterie physiques, pas de lookup par installation.
+- `controller.BatteryFullHysteresis` (pure, testée dans
+  `tests/test_battery_hysteresis.py`) : verrou à deux seuils —
+  `activate_at_pct` (défaut 100 %) pour passer en `ON`, `deactivate_below_pct`
+  (défaut 98 %) pour repasser en `OFF`. La zone morte entre les deux évite le
+  yoyo (ex. `SOC=99%` ne fait jamais rien basculer, qu'on vienne d'en dessous
+  ou d'en dessus).
+- Quand `injection_control=OFF` (SOC pas encore à `activate_at_pct`) :
+  `main._release_for_charging` débloque tous les onduleurs à 100 % (limite
+  relative non-persistante), une seule fois par transition (pas à chaque
+  cycle) — puis le contrôleur zero-export normal (`_decision_cycle`) est
+  entièrement sauté tant que l'état reste `OFF`.
+- Quand `injection_control=ON` : comportement inchangé, `_decision_cycle`
+  tourne normalement (PI + water-filling + quantification).
+- **Repli si le SOC est illisible** : on suppose le pire cas pour la
+  conformité zero-injection — `injection_control` reste `ON` (comme si la
+  batterie était pleine) plutôt que de débloquer les onduleurs sans
+  supervision. Ce repli n'altère pas l'état interne du verrou
+  (`hysteresis.active`), seulement l'action de ce cycle : au prochain SOC lu
+  avec succès, l'hystérésis reprend exactement où elle en était.
+- Fonctionnalité **désactivée par défaut** (`battery.enabled = false`) :
+  comportement du projet inchangé tant qu'elle n'est pas explicitement
+  activée en config.
+- Log : chaque cycle de décision trace le SOC (si activé) et l'état
+  `injection_control=ON|OFF`, dans les deux modes (`--dry-run` et normal) —
+  voir README "Mode test".
 
 ## Déploiement
 

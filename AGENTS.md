@@ -46,6 +46,20 @@ modifier quoi que ce soit.
 - **Fail-safe** : toute perte de communication (D-Bus ou OpenDTU) doit
   ramener les onduleurs à une limite basse et sûre plutôt que de laisser le
   service "en roue libre" (`_apply_failsafe` dans `src/main.py`).
+- **Priorité charge batterie : le repli en cas de SOC illisible est
+  `injection_control=ON` (sûr), jamais `OFF`** (`src/main.run`, autour de
+  `BatterySocUnavailable`). Ne jamais inverser ce défaut : `OFF` débloque les
+  onduleurs à 100 % sans supervision, ce qui risquerait une vraie injection
+  réseau si la batterie était en fait pleine — l'inverse (rester `ON` alors
+  que la batterie aurait pu se charger plus vite) n'est qu'un manque à
+  gagner, pas une non-conformité.
+- **Hystérésis batterie sans yoyo** : `BatteryFullHysteresis` (`src/controller.py`)
+  n'a que deux seuils asymétriques (`activate_at_pct` pour passer ON,
+  `deactivate_below_pct` pour repasser OFF) avec une zone morte entre les
+  deux. Ne pas la remplacer par un seuil unique (ex. `soc >= 98 -> ON`) —
+  c'est exactement le yoyo que l'utilisateur a demandé d'éviter. Voir
+  `tests/test_battery_hysteresis.py::test_no_yoyo_around_100_once_active` et
+  `::test_does_not_reactivate_until_back_to_100_after_deactivating`.
 
 ## Frontière testable / non testable
 
@@ -85,6 +99,18 @@ modifier quoi que ce soit.
   sur du matériel réel**. Le script `setup` en particulier est un
   best-effort suivant la convention documentée de SetupHelper, non validé en
   conditions réelles.
+- Même principe pour `src/battery_soc.py` (D-Bus) et
+  `src/battery_soc_modbus.py` (Modbus, registre 843) que pour les modules
+  grid_meter : import différé de `dbus`/`pymodbus`, non couverts par les
+  tests automatisés (nécessitent le matériel réel ou `--dry-run`).
+  `BatteryFullHysteresis` (pure) est en revanche testée.
+- **Le logging complet à chaque cycle (grid/opendtu/soc/consigne/allocation)
+  n'est pas la même chose que la fréquence des requêtes HTTP.** Depuis la
+  demande explicite de traces de debug complètes, `_decision_cycle` logue
+  l'état à chaque cycle de décision (5 s par défaut), qu'il y ait un
+  changement ou non — mais n'écrit vers OpenDTU que si `decision.changed`
+  (mode normal) et jamais en `--dry-run`. Ne pas confondre les deux en
+  modifiant l'un pour "corriger" l'autre.
 
 ## Style
 

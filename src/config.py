@@ -48,6 +48,19 @@ class CapacityProbeConfig:
 
 
 @dataclass
+class BatteryConfig:
+    # When enabled, injection control (curtailment) is released (inverters
+    # run uncapped) until the battery SOC reaches activate_at_pct, so the
+    # Victron ESS/battery charger -- not this project -- absorbs AC-coupled
+    # PV surplus by charging. Once activated, stays active until SOC drops
+    # below deactivate_below_pct (hysteresis, avoids flapping on/off).
+    # Uses the same connection as grid.source/grid.modbus (same Cerbo GX).
+    enabled: bool = False
+    activate_at_pct: float = 100.0
+    deactivate_below_pct: float = 98.0
+
+
+@dataclass
 class InverterConfig:
     serial: str
     nominal_power_w: float
@@ -59,6 +72,7 @@ class AppConfig:
     grid: GridConfig
     control: ControlConfig
     capacity_probe: CapacityProbeConfig
+    battery: BatteryConfig = field(default_factory=BatteryConfig)
     inverters: list[InverterConfig] = field(default_factory=list)
 
     @property
@@ -85,6 +99,7 @@ def parse_config(raw: dict) -> AppConfig:
     grid_raw = raw.get("grid", {})
     control_raw = raw.get("control", {})
     probe_raw = raw.get("capacity_probe", {})
+    battery_raw = raw.get("battery", {})
 
     grid_source = grid_raw.get("source", "dbus")
     if grid_source not in ("dbus", "modbus"):
@@ -120,6 +135,11 @@ def parse_config(raw: dict) -> AppConfig:
         capacity_probe=CapacityProbeConfig(
             step_w=float(probe_raw.get("step_w", 10.0)),
             interval_s=float(probe_raw.get("interval_s", 30.0)),
+        ),
+        battery=BatteryConfig(
+            enabled=bool(battery_raw.get("enabled", False)),
+            activate_at_pct=float(battery_raw.get("activate_at_pct", 100.0)),
+            deactivate_below_pct=float(battery_raw.get("deactivate_below_pct", 98.0)),
         ),
         inverters=inverters,
     )

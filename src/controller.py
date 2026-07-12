@@ -140,3 +140,29 @@ class CapacityEstimator:
         for serial, nominal in self.nominal_power_w.items():
             current = self.ceilings_w.get(serial, nominal)
             self.ceilings_w[serial] = min(nominal, current + self.probe_step_w)
+
+
+class BatteryFullHysteresis:
+    """Latches injection control (curtailment) ON only once the battery SOC
+    reaches activate_at_pct, and OFF only once it drops below
+    deactivate_below_pct -- a dead zone between the two thresholds prevents
+    flapping on/off as SOC drifts around either boundary during the day.
+    """
+
+    def __init__(
+        self,
+        activate_at_pct: float = 100.0,
+        deactivate_below_pct: float = 98.0,
+        active: bool = False,
+    ):
+        self.activate_at_pct = activate_at_pct
+        self.deactivate_below_pct = deactivate_below_pct
+        self.active = active
+
+    def update(self, soc_pct: float) -> bool:
+        if self.active:
+            if soc_pct < self.deactivate_below_pct:
+                self.active = False
+        elif soc_pct >= self.activate_at_pct:
+            self.active = True
+        return self.active

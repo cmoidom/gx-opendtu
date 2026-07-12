@@ -10,11 +10,12 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional
 
 from src.allocator import water_fill_allocate
+from src.battery_soc import BatterySocUnavailable, DbusBatterySoc
 from src.config import AppConfig, load_config
-from src.controller import CapacityEstimator, GridPowerSmoother, SoftTargetController
+from src.controller import BatteryFullHysteresis, CapacityEstimator, GridPowerSmoother, SoftTargetController
 from src.grid_meter import DbusGridMeter, GridMeterUnavailable
 from src.opendtu_client import OpenDTUClient, OpenDTUError
 
@@ -35,12 +36,27 @@ def _make_grid_reader(config: AppConfig):
     return DbusGridMeter()
 
 
+def _make_battery_reader(config: AppConfig):
+    if not config.battery.enabled:
+        return None
+    if config.grid.source == "modbus":
+        from src.battery_soc_modbus import ModbusBatterySoc
+
+        return ModbusBatterySoc(
+            host=config.grid.modbus.host,
+            port=config.grid.modbus.port,
+            unit_id=config.grid.modbus.unit_id,
+        )
+    return DbusBatterySoc()
+
+
 def _decision_cycle(
     client: OpenDTUClient,
     controller: SoftTargetController,
     capacity: CapacityEstimator,
     serials: Iterable[str],
     grid_power_avg_w: float,
+    soc_pct: Optional[float] = None,
     dry_run: bool = False,
 ) -> None:
     live_power_w = client.get_live_power_w()
@@ -53,28 +69,26 @@ def _decision_cycle(
     allocation = water_fill_allocate(decision.target_w, serials, capacity.ceilings_w)
     rounded_allocation = {s: round(w) for s, w in allocation.items()}
 
-    # dry_run always logs (even with no change) since the whole point is to
-    # observe what the controller *would* do; real mode only logs/sends on
-    # an actual change, to keep the log as quiet as the HTTP traffic.
-    if dry_run:
-        log.info(
-            "[DRY-RUN] grid_meter=%+.0fW opendtu_actual=%.0fW consigne=%.0fW allocation=%s changed=%s (rien envoye)",
-            grid_power_avg_w,
-            current_total_actual_w,
-            decision.target_w,
-            rounded_allocation,
-            decision.changed,
-        )
-    elif decision.changed:
+    if not dry_run and decision.changed:
         for serial, watts in allocation.items():
             client.set_absolute_limit_w(serial, watts)
-        log.info(
-            "grid_meter=%+.0fW opendtu_actual=%.0fW target=%.0fW allocation=%s",
-            grid_power_avg_w,
-            current_total_actual_w,
-            decision.target_w,
-            rounded_allocation,
-        )
+
+    # Always log full state every cycle (not just on change) for debug
+    # visibility -- this only affects local logging, not OpenDTU traffic
+    # (still gated by decision.changed above), so it doesn't undo the
+    # rate-limiting the soft controller is there for.
+    soc_str = f" soc={soc_pct:.0f}%" if soc_pct is not None else ""
+    log.info(
+        "%sgrid_meter=%+.0fW opendtu_actual=%.0fW%s injection_control=ON consigne=%.0fW allocation=%s changed=%s%s",
+        "[DRY-RUN] " if dry_run else "",
+        grid_power_avg_w,
+        current_total_actual_w,
+        soc_str,
+        decision.target_w,
+        rounded_allocation,
+        decision.changed,
+        " (rien envoye)" if dry_run else "",
+    )
 
     for serial in serials:
         status = limit_status.get(serial)
@@ -84,6 +98,20 @@ def _decision_cycle(
             actual_w=live_power_w.get(serial, 0.0),
             limit_acknowledged=status.acknowledged if status else True,
         )
+
+
+def _release_for_charging(client: OpenDTUClient, serials: Iterable[str], dry_run: bool = False) -> None:
+    """Battery not yet full: release curtailment so PV runs uncapped and the
+    Victron ESS/battery charger absorbs the surplus by charging."""
+    if dry_run:
+        log.info("[DRY-RUN] charge batterie prioritaire: onduleurs seraient debloques a 100%% (rien envoye)")
+        return
+    log.info("charge batterie prioritaire: deblocage des onduleurs a 100%%")
+    for serial in serials:
+        try:
+            client.set_relative_limit_pct(serial, 100)
+        except OpenDTUError as exc:
+            log.error("release to 100%% of %s failed: %s", serial, exc)
 
 
 def _apply_failsafe(client: OpenDTUClient, serials: Iterable[str], dry_run: bool = False) -> None:
@@ -100,6 +128,12 @@ def _apply_failsafe(client: OpenDTUClient, serials: Iterable[str], dry_run: bool
 
 def run(config: AppConfig, dry_run: bool = False) -> None:
     grid_reader = _make_grid_reader(config)
+    battery_reader = _make_battery_reader(config)
+    hysteresis = (
+        BatteryFullHysteresis(config.battery.activate_at_pct, config.battery.deactivate_below_pct)
+        if battery_reader is not None
+        else None
+    )
     client = OpenDTUClient(config.opendtu.base_url)
     smoother = GridPowerSmoother(config.grid.smoothing_samples)
     controller = SoftTargetController(
@@ -117,6 +151,7 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
     last_decision_time = 0.0
     last_probe_time = 0.0
     consecutive_grid_failures = 0
+    released_for_charging = False
 
     while True:
         now = time.monotonic()
@@ -135,11 +170,43 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
 
         if now - last_decision_time >= config.control.decision_interval_s:
             last_decision_time = now
-            try:
-                _decision_cycle(client, controller, capacity, serials, smoother.average, dry_run=dry_run)
-            except OpenDTUError as exc:
-                log.error("OpenDTU communication failed: %s", exc)
-                _apply_failsafe(client, serials, dry_run=dry_run)
+
+            soc_pct: Optional[float] = None
+            injection_active = True
+            if battery_reader is not None:
+                try:
+                    soc_pct = battery_reader.read_soc_pct()
+                    injection_active = hysteresis.update(soc_pct)
+                except BatterySocUnavailable as exc:
+                    # Safe default: if we can't tell whether the battery is
+                    # full, assume it is and keep injection control active
+                    # rather than releasing curtailment unsupervised. Does
+                    # not touch the latch itself, only this cycle's action.
+                    log.error(
+                        "battery SOC read failed, defaulting injection control to ACTIVE (safe): %s", exc
+                    )
+                    injection_active = True
+
+            if not injection_active:
+                if not released_for_charging:
+                    _release_for_charging(client, serials, dry_run=dry_run)
+                    released_for_charging = True
+                log.info(
+                    "%ssoc=%.0f%% grid_meter=%+.0fW injection_control=OFF (charge batterie prioritaire)%s",
+                    "[DRY-RUN] " if dry_run else "",
+                    soc_pct if soc_pct is not None else float("nan"),
+                    smoother.average,
+                    " (rien envoye)" if dry_run else "",
+                )
+            else:
+                released_for_charging = False
+                try:
+                    _decision_cycle(
+                        client, controller, capacity, serials, smoother.average, soc_pct=soc_pct, dry_run=dry_run
+                    )
+                except OpenDTUError as exc:
+                    log.error("OpenDTU communication failed: %s", exc)
+                    _apply_failsafe(client, serials, dry_run=dry_run)
 
         if now - last_probe_time >= config.capacity_probe.interval_s:
             last_probe_time = now

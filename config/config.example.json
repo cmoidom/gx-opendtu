@@ -20,6 +20,11 @@
     "step_w": 10,
     "interval_s": 30
   },
+  "battery": {
+    "enabled": false,
+    "activate_at_pct": 100,
+    "deactivate_below_pct": 98
+  },
   "inverters": [
     { "serial": "114181801234", "nominal_power_w": 600 },
     { "serial": "114181805678", "nominal_power_w": 380 }

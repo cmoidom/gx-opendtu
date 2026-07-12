@@ -36,6 +36,12 @@ code par un agent IA.
 5. **Repli sécurité** (`src/main.py`) : en cas de perte du compteur réseau ou
    d'OpenDTU injoignable, tous les onduleurs sont ramenés à 0 % en attendant le
    rétablissement de la communication.
+6. **Priorité charge batterie** (optionnel, `battery.enabled`) : tant que le
+   SOC batterie n'a pas atteint 100 %, le contrôle d'injection est désactivé
+   (onduleurs débloqués à 100 %) pour laisser l'ESS Victron charger la
+   batterie avec le surplus PV. Une fois 100 % atteint, le contrôle
+   d'injection reste actif jusqu'à ce que le SOC repasse sous 98 % — avec
+   hystérésis pour éviter les allers-retours. Voir `ARCHITECTURE.md`.
 
 ## Prérequis
 
@@ -66,6 +72,12 @@ Deux exemples selon le mode de déploiement :
 Copier celui qui correspond, puis l'adapter (URL OpenDTU, numéros de série et
 puissance nominale de chaque onduleur, gains PI, paliers) — voir
 `ARCHITECTURE.md` pour la signification de chaque paramètre.
+
+Pour activer la priorité de charge batterie, passer `battery.enabled` à
+`true` (désactivé par défaut, comportement inchangé sinon) :
+```json
+"battery": { "enabled": true, "activate_at_pct": 100, "deactivate_below_pct": 98 }
+```
 
 ## Installation
 
@@ -134,19 +146,33 @@ avec `ModuleNotFoundError: No module named 'src'`) :
 python3 -m src.main --config config/config.json --dry-run
 ```
 
-Le service tourne normalement (lecture D-Bus du compteur réseau, lecture
-OpenDTU) mais **n'envoie jamais rien à OpenDTU** (ni limite, ni repli
-sécurité). Chaque cycle de décision trace :
+Le service tourne normalement (lecture du compteur réseau, lecture SOC
+batterie si activé, lecture OpenDTU) mais **n'envoie jamais rien à OpenDTU**
+(ni limite, ni repli sécurité, ni déblocage charge batterie). Chaque cycle de
+décision trace l'état complet, que ça change ou non :
 
 ```
-[DRY-RUN] grid_meter=+120W opendtu_actual=380W consigne=400W allocation={'114181801234': 240, '114181805678': 160} changed=True (rien envoye)
+[DRY-RUN] grid_meter=+120W opendtu_actual=380W soc=87% injection_control=ON consigne=400W allocation={'114181801234': 240, '114181805678': 160} changed=True (rien envoye)
+```
+
+ou, si `battery.enabled` et batterie pas encore pleine :
+
+```
+[DRY-RUN] soc=94% grid_meter=+45W injection_control=OFF (charge batterie prioritaire) (rien envoye)
 ```
 
 - `grid_meter` : valeur lue (moyennée) sur le compteur réseau Victron.
 - `opendtu_actual` : puissance AC actuellement mesurée par OpenDTU sur
   l'ensemble des onduleurs.
+- `soc` : SOC batterie (uniquement si `battery.enabled`).
+- `injection_control` : `ON` (asservissement zero-export actif) ou `OFF`
+  (batterie pas encore pleine, onduleurs débloqués à 100 %).
 - `consigne` : la puissance totale que le contrôleur enverrait, avec le
   détail de répartition par onduleur (`allocation`).
+
+Ces mêmes informations sont tracées en mode normal (sans `--dry-run`), à
+chaque cycle de décision — seule l'écriture vers OpenDTU reste conditionnée
+à un changement réel (`changed=True`), pas le log.
 
 Utile pour valider l'asservissement sur une installation réelle avant de le
 laisser piloter effectivement les onduleurs.
@@ -181,3 +207,7 @@ recommandé de valider le comportement sur l'installation réelle sans risque.
   Cerbo GX (Settings > Services) ou pare-feu bloquant le port 502 ; valeur
   toujours à 0 ou aberrante → vérifier `grid.modbus.unit_id` (100 = agrégat
   système, ne pas confondre avec l'instance VRM du compteur lui-même).
+- `injection_control=OFF` qui ne repasse jamais à `ON` : le SOC n'a pas
+  encore atteint `battery.activate_at_pct` (100 % par défaut) — c'est le
+  comportement voulu (priorité charge batterie), pas un bug. Vérifier le
+  SOC tracé dans les logs.

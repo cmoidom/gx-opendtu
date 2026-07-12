@@ -1,5 +1,5 @@
 from src.controller import CapacityEstimator, SoftTargetController
-from src.main import _apply_failsafe, _decision_cycle
+from src.main import _apply_failsafe, _decision_cycle, _release_for_charging
 from src.opendtu_client import LimitStatus
 
 
@@ -88,3 +88,15 @@ def test_normal_failsafe_curtails_every_inverter_to_zero():
     client = FakeOpenDTUClient(live_power_w={}, limit_status={})
     _apply_failsafe(client, ["a", "b"], dry_run=False)
     assert client.relative_calls == [("a", 0), ("b", 0)]
+
+
+def test_dry_run_release_for_charging_never_calls_opendtu():
+    client = FakeOpenDTUClient(live_power_w={}, limit_status={})
+    _release_for_charging(client, ["a", "b"], dry_run=True)
+    assert client.relative_calls == []
+
+
+def test_normal_release_for_charging_unlocks_every_inverter_to_100():
+    client = FakeOpenDTUClient(live_power_w={}, limit_status={})
+    _release_for_charging(client, ["a", "b"], dry_run=False)
+    assert client.relative_calls == [("a", 100), ("b", 100)]

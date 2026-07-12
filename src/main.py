@@ -55,6 +55,7 @@ def _decision_cycle(
     controller: SoftTargetController,
     capacity: CapacityEstimator,
     serials: Iterable[str],
+    grid_power_raw_w: float,
     grid_power_avg_w: float,
     soc_pct: Optional[float] = None,
     dry_run: bool = False,
@@ -79,8 +80,9 @@ def _decision_cycle(
     # rate-limiting the soft controller is there for.
     soc_str = f" soc={soc_pct:.0f}%" if soc_pct is not None else ""
     log.info(
-        "%sgrid_meter=%+.0fW opendtu_actual=%.0fW%s injection_control=ON consigne=%.0fW allocation=%s changed=%s%s",
+        "%sgrid_meter=%+.0fW ema=%+.0fW opendtu_actual=%.0fW%s injection_control=ON consigne=%.0fW allocation=%s changed=%s%s",
         "[DRY-RUN] " if dry_run else "",
+        grid_power_raw_w,
         grid_power_avg_w,
         current_total_actual_w,
         soc_str,
@@ -192,9 +194,10 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
                     _release_for_charging(client, serials, dry_run=dry_run)
                     released_for_charging = True
                 log.info(
-                    "%ssoc=%.0f%% grid_meter=%+.0fW injection_control=OFF (charge batterie prioritaire)%s",
+                    "%ssoc=%.0f%% grid_meter=%+.0fW ema=%+.0fW injection_control=OFF (charge batterie prioritaire)%s",
                     "[DRY-RUN] " if dry_run else "",
                     soc_pct if soc_pct is not None else float("nan"),
+                    grid_power_w,
                     smoother.average,
                     " (rien envoye)" if dry_run else "",
                 )
@@ -202,7 +205,14 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
                 released_for_charging = False
                 try:
                     _decision_cycle(
-                        client, controller, capacity, serials, smoother.average, soc_pct=soc_pct, dry_run=dry_run
+                        client,
+                        controller,
+                        capacity,
+                        serials,
+                        grid_power_w,
+                        smoother.average,
+                        soc_pct=soc_pct,
+                        dry_run=dry_run,
                     )
                 except OpenDTUError as exc:
                     log.error("OpenDTU communication failed: %s", exc)
@@ -228,6 +238,13 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     config = load_config(args.config)
+
+    if config.web.enabled:
+        from src.webui import start_webui_server
+
+        start_webui_server(args.config, config.web.port)
+        log.info("page de configuration disponible sur http://0.0.0.0:%d/", config.web.port)
+
     run(config, dry_run=args.dry_run)
 
 

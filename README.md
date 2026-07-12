@@ -79,6 +79,31 @@ Pour activer la priorité de charge batterie, passer `battery.enabled` à
 "battery": { "enabled": true, "activate_at_pct": 100, "deactivate_below_pct": 98 }
 ```
 
+### Page web de configuration
+
+Une page web intégrée (`src/webui.py`, aucune dépendance supplémentaire)
+permet d'éditer tous les paramètres, y compris l'ajout/suppression
+d'onduleurs, sans toucher au fichier JSON à la main. Activée par défaut sur
+le port 8080 : `http://<ip-du-service>:8080/`.
+
+- Écrit `config.json` mais **ne redémarre pas le service** : redémarrez-le
+  manuellement pour appliquer les changements.
+- Aucune authentification (comme l'API OpenDTU) — accessible à quiconque sur
+  le LAN.
+- Désactivable ou changement de port via `config.json` :
+  ```json
+  "web": { "enabled": true, "port": 8080 }
+  ```
+- Bouton **"Charger la liste depuis OpenDTU"** dans la section Onduleurs :
+  interroge `/api/livedata/status` et `/api/limit/status` sur l'URL OpenDTU
+  actuellement saisie dans le formulaire, affiche chaque onduleur détecté
+  (nom, numéro de série, puissance nominale) sous forme de case à cocher.
+  Cocher un onduleur l'ajoute à la liste gérée avec sa puissance nominale
+  pré-remplie (modifiable) ; décocher ne retire rien — utiliser le bouton
+  `×` sur la ligne pour retirer un onduleur déjà ajouté. Ne fonctionne que
+  si OpenDTU est joignable en HTTP sans authentification depuis la machine
+  qui exécute le service (pas de support Basic Auth actuellement).
+
 ## Installation
 
 ### Via SetupHelper (recommandé, persiste après mise à jour firmware)

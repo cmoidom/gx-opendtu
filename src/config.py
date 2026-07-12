@@ -70,12 +70,23 @@ class InverterConfig:
 
 
 @dataclass
+class WebConfig:
+    # Built-in config editor (src/webui.py), served in a background thread
+    # of the same process. Writes config.json directly; does not reload the
+    # running control loop or restart the service (see README.md) -- a
+    # restart is required for edits to take effect.
+    enabled: bool = True
+    port: int = 8080
+
+
+@dataclass
 class AppConfig:
     opendtu: OpenDTUConfig
     grid: GridConfig
     control: ControlConfig
     capacity_probe: CapacityProbeConfig
     battery: BatteryConfig = field(default_factory=BatteryConfig)
+    web: WebConfig = field(default_factory=WebConfig)
     inverters: list[InverterConfig] = field(default_factory=list)
 
     @property
@@ -103,6 +114,7 @@ def parse_config(raw: dict) -> AppConfig:
     control_raw = raw.get("control", {})
     probe_raw = raw.get("capacity_probe", {})
     battery_raw = raw.get("battery", {})
+    web_raw = raw.get("web", {})
 
     grid_source = grid_raw.get("source", "dbus")
     if grid_source not in ("dbus", "modbus"):
@@ -143,6 +155,10 @@ def parse_config(raw: dict) -> AppConfig:
             enabled=bool(battery_raw.get("enabled", False)),
             activate_at_pct=float(battery_raw.get("activate_at_pct", 100.0)),
             deactivate_below_pct=float(battery_raw.get("deactivate_below_pct", 98.0)),
+        ),
+        web=WebConfig(
+            enabled=bool(web_raw.get("enabled", True)),
+            port=int(web_raw.get("port", 8080)),
         ),
         inverters=inverters,
     )

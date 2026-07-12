@@ -53,6 +53,7 @@ def test_dry_run_never_calls_opendtu_write_endpoints():
         _make_controller(),
         _make_capacity(),
         ["a", "b"],
+        grid_power_raw_w=100.0,
         grid_power_avg_w=100.0,
         dry_run=True,
     )
@@ -72,6 +73,7 @@ def test_normal_mode_calls_opendtu_on_first_decision():
         _make_controller(),
         _make_capacity(),
         ["a", "b"],
+        grid_power_raw_w=100.0,
         grid_power_avg_w=100.0,
         dry_run=False,
     )

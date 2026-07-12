@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, List
 
 # limit_type values, see OpenDTU ActivePowerControlCommand.h. Persistent
 # variants write to inverter flash and are deliberately not exposed here -
@@ -21,6 +21,13 @@ LIMIT_TYPE_RELATIVE_NONPERSISTENT = 1
 
 class OpenDTUError(Exception):
     pass
+
+
+@dataclass
+class InverterInfo:
+    serial: str
+    name: str
+    max_power_w: float
 
 
 @dataclass
@@ -74,6 +81,30 @@ class OpenDTUClient:
             channel0 = ac.get("0", ac)
             power_node = channel0.get("Power") if isinstance(channel0, dict) else None
             result[serial] = _extract_value(power_node)
+        return result
+
+    def list_inverters(self) -> List[InverterInfo]:
+        """All inverters OpenDTU currently knows about, with their rated
+        power -- used by the config web UI (src/webui.py) to let a user pick
+        which ones to manage instead of typing serial/power by hand.
+
+        There is no dedicated "/api/inverter/list" endpoint in OpenDTU:
+        serial/name come from /api/livedata/status, rated power (max_power)
+        from /api/limit/status (see ARCHITECTURE.md).
+        """
+        livedata = self._get("/api/livedata/status")
+        limit_status = self.get_limit_status()
+        result: List[InverterInfo] = []
+        for inv in livedata.get("inverters", []):
+            serial = str(inv.get("serial"))
+            status = limit_status.get(serial)
+            result.append(
+                InverterInfo(
+                    serial=serial,
+                    name=str(inv.get("name", "")),
+                    max_power_w=status.max_power if status is not None else 0.0,
+                )
+            )
         return result
 
     def get_limit_status(self) -> Dict[str, LimitStatus]:

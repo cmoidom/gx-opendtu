@@ -33,7 +33,8 @@ gx-opendtu/
 │   ├── battery_soc_modbus.py ModbusBatterySoc: Modbus TCP, unit ID 100, registre 843
 │   ├── opendtu_client.py   client HTTP OpenDTU (urllib stdlib, zéro dépendance)
 │   ├── controller.py       PI + lissage + quantification + rampe + capacité + hystérésis batterie
-│   └── allocator.py        répartition water-filling multi-onduleurs (pure)
+│   ├── allocator.py        répartition water-filling multi-onduleurs (pure)
+│   └── webui.py            page web d'édition de config.json (http.server stdlib, thread)
 ├── config/config.example.json           déploiement Cerbo GX (grid.source=dbus)
 ├── config/config.example.vm-modbus.json déploiement VM (grid.source=modbus)
 ├── deploy/systemd/gx-opendtu-zero-export.service   service pour VM Linux
@@ -51,6 +52,27 @@ cette séparation. `main._make_grid_reader(config)` choisit `DbusGridMeter`
 ou `ModbusGridMeter` selon `config.grid.source` ; les deux exposent la même
 interface `read_grid_power_w() -> float`, donc `main.run()` ne connaît pas
 la différence.
+
+`webui.py` démarre un `http.server.ThreadingHTTPServer` (stdlib, pas de
+dépendance) dans un thread daemon, sur `config.web.port` (8080 par défaut,
+`config.web.enabled` pour désactiver). Il lit/écrit directement
+`config.json` (y compris ajout/suppression d'onduleurs) mais ne touche pas à
+l'état en mémoire de la boucle de contrôle : un enregistrement écrit le
+fichier et affiche un message, sans redémarrer le service — cohérent avec le
+choix de ne rien recharger à chaud (voir README, section configuration).
+Pas d'authentification (comme l'API OpenDTU) : accessible à quiconque sur le
+LAN.
+
+Le bouton de découverte des onduleurs appelle `GET /fetch-inverters?base_url=...`
+côté serveur webui (pas d'appel direct navigateur → OpenDTU, donc pas de
+souci CORS), qui délègue à `OpenDTUClient.list_inverters()`
+(`src/opendtu_client.py`) : combine `/api/livedata/status` (serial, name) et
+`/api/limit/status` (max_power) — il n'existe pas d'endpoint
+`/api/inverter/list` dans le firmware OpenDTU standard. Ces deux endpoints en
+lecture ne nécessitent pas d'authentification par défaut sur OpenDTU ; si
+l'option "Disable readonly access" est activée côté OpenDTU, la découverte
+échoue (pas de support Basic Auth actuellement, ni dans `webui.py` ni dans
+`opendtu_client.py`).
 
 ## Convention de signe
 

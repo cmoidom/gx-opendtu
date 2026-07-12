@@ -2,9 +2,11 @@ from src.controller import CapacityEstimator, SoftTargetController
 from src.main import (
     _apply_failsafe,
     _decision_cycle,
+    _manual_override_payload,
     _min_inverter_floor_warning,
     _off_state_inverters_payload,
     _release_for_charging,
+    _send_manual_override,
 )
 from src.opendtu_client import LimitStatus, OpenDTUError
 
@@ -244,3 +246,35 @@ def test_floor_warning_disabled_when_min_inverter_pct_is_zero():
     )
     assert warning is False
     assert recommended is None
+
+
+def test_send_manual_override_sets_every_inverter():
+    client = FakeOpenDTUClient(live_power_w={}, limit_status={})
+    _send_manual_override(client, ["a", "b"], 50.0, dry_run=False)
+    assert client.relative_calls == [("a", 50.0), ("b", 50.0)]
+
+
+def test_send_manual_override_dry_run_sends_nothing():
+    client = FakeOpenDTUClient(live_power_w={}, limit_status={})
+    _send_manual_override(client, ["a", "b"], 50.0, dry_run=True)
+    assert client.relative_calls == []
+
+
+def test_manual_override_payload_reports_forced_pct_and_actual_power():
+    client = FakeOpenDTUClient(
+        live_power_w={"a": 300.0, "b": 190.0},
+        limit_status={
+            "a": LimitStatus(limit_relative=50, max_power=600, limit_set_status="Ok"),
+            "b": LimitStatus(limit_relative=50, max_power=380, limit_set_status="Pending"),
+        },
+    )
+    payload = _manual_override_payload(
+        client, ["a", "b"], 50.0, nominal_power_w={"a": 600.0, "b": 380.0},
+        name_by_serial={"a": "Toit Sud"},
+    )
+    assert payload == [
+        {"serial": "a", "name": "Toit Sud", "allocated_w": 300, "actual_w": 300.0,
+         "limit_relative_pct": 50.0, "max_power_w": 600.0, "acknowledged": True},
+        {"serial": "b", "name": None, "allocated_w": 190, "actual_w": 190.0,
+         "limit_relative_pct": 50.0, "max_power_w": 380.0, "acknowledged": False},
+    ]

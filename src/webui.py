@@ -38,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from src.config import parse_config
+from src.manual_override import DEFAULT_DURATION_S
 from src.opendtu_client import OpenDTUClient, OpenDTUError
 
 log = logging.getLogger("gx-opendtu-zero-export")
@@ -384,6 +385,13 @@ def _render_dashboard_page() -> str:
   }
   .chart-box { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
                padding: 0.8rem; margin-bottom: 1rem; position: relative; }
+  .control-row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin: 0.3rem 0; }
+  .control-label { font-size: 0.85rem; color: var(--text-secondary); margin-right: 0.3rem; }
+  .mode-btn, .force-btn, #cancel-force-btn { padding: 0.3rem 0.7rem; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); font-size: 0.85rem; }
+  .mode-btn.active { background: var(--series-1); color: white; border-color: var(--series-1); }
+  .force-btn { background: var(--series-4); color: white; border-color: var(--series-4); }
+  #cancel-force-btn { background: var(--critical); color: white; border-color: var(--critical); }
   .chart-box canvas { width: 100%; height: 200px; display: block; }
   .legend { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.82rem; color: var(--text-secondary);
             margin-top: 0.4rem; }
@@ -412,6 +420,31 @@ def _render_dashboard_page() -> str:
 synchronise sur les trois graphiques temporels.</p>
 
 <div id="floor-warning" class="banner warning" style="display:none"></div>
+
+<div class="chart-box" id="manual-controls">
+  <div class="control-row">
+    <span class="control-label">Mode regulation :</span>
+    <button type="button" class="mode-btn" data-mode="AUTO" onclick="setInjectionMode('AUTO')">AUTO</button>
+    <button type="button" class="mode-btn" data-mode="ON" onclick="setInjectionMode('ON')">ON</button>
+    <button type="button" class="mode-btn" data-mode="OFF" onclick="setInjectionMode('OFF')">OFF</button>
+    <span class="hint" id="mode-status"></span>
+  </div>
+  <p class="hint">AUTO = hysterese normale basee sur le SOC. ON/OFF force le mode
+  jusqu'a revenir en AUTO -- utile juste apres un redemarrage si la regulation
+  reste bloquee en OFF alors que la batterie est en realite pleine.</p>
+  <div class="control-row">
+    <span class="control-label">Forcer tous les onduleurs a :</span>
+    <button type="button" class="force-btn" onclick="setForcePct(25)">25%</button>
+    <button type="button" class="force-btn" onclick="setForcePct(50)">50%</button>
+    <button type="button" class="force-btn" onclick="setForcePct(75)">75%</button>
+    <button type="button" class="force-btn" onclick="setForcePct(100)">100%</button>
+    <button type="button" id="cancel-force-btn" onclick="cancelForcePct()" style="display:none">Annuler le forcage</button>
+    <span class="hint" id="force-status"></span>
+  </div>
+  <p class="hint">Contournement direct du regulateur PI pendant 5 minutes (test/diagnostic),
+  puis retour automatique au pilotage normal. Sans effet si le mode regulation est OFF
+  (deblocage a 100% pour la charge batterie reste prioritaire).</p>
+</div>
 
 <div class="tiles" id="tiles"></div>
 
@@ -479,6 +512,45 @@ let viewTMax = null;
 let isDragging = false;
 
 function resetZoom() { viewTMin = null; viewTMax = null; renderCharts(); }
+
+function setInjectionMode(mode) {
+  fetch('/override/mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'mode=' + encodeURIComponent(mode),
+  }).then(() => poll());
+}
+
+function setForcePct(pct) {
+  fetch('/override/pct', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'pct=' + pct,
+  }).then(() => poll());
+}
+
+function cancelForcePct() {
+  fetch('/override/pct/clear', { method: 'POST' }).then(() => poll());
+}
+
+function renderControls(data) {
+  const mode = data.injection_mode || 'AUTO';
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  document.getElementById('mode-status').textContent = mode === 'AUTO' ? '' : '(force manuellement)';
+
+  const override = data.manual_override;
+  const cancelBtn = document.getElementById('cancel-force-btn');
+  const status = document.getElementById('force-status');
+  if (override) {
+    cancelBtn.style.display = '';
+    status.textContent = 'Actif : ' + override.pct + '% (encore ' + Math.round(override.remaining_s) + 's)';
+  } else {
+    cancelBtn.style.display = 'none';
+    status.textContent = '';
+  }
+}
 
 function fullHistoryRange() {
   if (!history.length) return [0, 1];
@@ -906,6 +978,7 @@ function poll() {
       renderTiles(data.latest);
       renderInverterTable(data.latest);
       renderCharts();
+      renderControls(data);
     })
     .catch(() => { document.getElementById('conn-status').textContent = 'Connexion perdue, nouvel essai...'; });
 }
@@ -994,7 +1067,7 @@ def _write_raw(config_path: str, raw: dict) -> None:
     os.replace(tmp_path, config_path)
 
 
-def _make_handler(config_path: str, live_state, energy_history):
+def _make_handler(config_path: str, live_state, energy_history, manual_override, injection_mode):
     class ConfigHandler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # noqa: A003 - quiet down default per-request stderr logging
             pass
@@ -1038,6 +1111,8 @@ def _make_handler(config_path: str, live_state, energy_history):
                 since = 0.0
             payload = live_state.snapshot_since(since)
             payload["hourly_energy"] = energy_history.snapshot()
+            payload["manual_override"] = manual_override.snapshot()
+            payload["injection_mode"] = injection_mode.get_mode()
             self._send_json(payload)
 
         def _handle_fetch_inverters(self, query: dict) -> None:
@@ -1062,13 +1137,51 @@ def _make_handler(config_path: str, live_state, energy_history):
                 }
             )
 
+        def _handle_set_override_pct(self, form: dict) -> None:
+            try:
+                pct = float((form.get("pct") or ["0"])[0])
+            except ValueError:
+                self._send_json({"error": "pct invalide"}, status=400)
+                return
+            if pct not in (25.0, 50.0, 75.0, 100.0):
+                self._send_json({"error": "pct doit etre 25, 50, 75 ou 100"}, status=400)
+                return
+            manual_override.set(pct)
+            log.warning(
+                "forcage manuel demande via la page de config: %.0f%% pendant %d min",
+                pct,
+                int(DEFAULT_DURATION_S // 60),
+            )
+            self._send_json({"ok": True, "override": manual_override.snapshot()})
+
+        def _handle_set_injection_mode(self, form: dict) -> None:
+            mode = (form.get("mode") or ["AUTO"])[0]
+            try:
+                injection_mode.set_mode(mode)
+            except ValueError:
+                self._send_json({"error": "mode invalide"}, status=400)
+                return
+            log.warning("mode de regulation change via la page de config: %s", mode)
+            self._send_json({"ok": True, "mode": injection_mode.get_mode()})
+
         def do_POST(self) -> None:  # noqa: N802 - required BaseHTTPRequestHandler method name
-            if self.path not in ("/save", "/apply"):
+            if self.path not in ("/save", "/apply", "/override/pct", "/override/pct/clear", "/override/mode"):
                 self.send_error(404)
                 return
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length).decode("utf-8")
             form = parse_qs(body, keep_blank_values=True)
+
+            if self.path == "/override/pct":
+                self._handle_set_override_pct(form)
+                return
+            if self.path == "/override/pct/clear":
+                manual_override.clear()
+                self._send_json({"ok": True})
+                return
+            if self.path == "/override/mode":
+                self._handle_set_injection_mode(form)
+                return
 
             raw: dict = {}
             try:
@@ -1102,8 +1215,12 @@ def _make_handler(config_path: str, live_state, energy_history):
     return ConfigHandler
 
 
-def start_webui_server(config_path: str, port: int, live_state, energy_history) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("0.0.0.0", port), _make_handler(config_path, live_state, energy_history))
+def start_webui_server(
+    config_path: str, port: int, live_state, energy_history, manual_override, injection_mode
+) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(
+        ("0.0.0.0", port), _make_handler(config_path, live_state, energy_history, manual_override, injection_mode)
+    )
     thread = threading.Thread(target=server.serve_forever, name="gx-opendtu-webui", daemon=True)
     thread.start()
     return server

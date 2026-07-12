@@ -149,6 +149,20 @@ l'état courant du pilotage sans avoir à lire les logs :
 - Bandeau d'avertissement si `control.min_inverter_pct` cause une injection
   réseau réelle ce cycle, avec une valeur suggérée (voir section
   Configuration).
+- **Contrôle manuel** :
+  - Mode régulation **AUTO/ON/OFF** : AUTO = hystérésis normale basée sur le
+    SOC (comportement par défaut) ; ON/OFF force le mode jusqu'au retour
+    manuel en AUTO — utile si la régulation reste bloquée en OFF après un
+    redémarrage alors que la batterie est en réalité pleine (voir
+    `battery.export_confirms_full_w` plus haut, qui corrige aussi ce cas
+    automatiquement). Persisté sur disque (`state.json`, à côté de
+    `config.json`) : survit à un redémarrage.
+  - **Forcer tous les onduleurs à 25/50/75/100%** pendant 5 minutes
+    (test/diagnostic), retour automatique au pilotage normal ensuite — pas
+    besoin de s'en souvenir. Contourne le régulateur PI, mais reste
+    subordonné au mode régulation : sans effet si OFF (déblocage à 100%
+    pour la charge batterie reste prioritaire), et le fail-safe (perte du
+    compteur réseau) reste toujours prioritaire sur ces deux contrôles.
 - Tuiles : puissance réseau brute et EMA, SOC et puissance batterie (si
   activé), état `injection_control` (ON/OFF), consigne totale.
 - Trois graphiques (mise à jour toutes les 2 s, ~30 min d'historique

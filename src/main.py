@@ -19,7 +19,9 @@ from src.controller import BatteryFullHysteresis, CapacityEstimator, GridPowerSm
 from src.energy_history import HourlyEnergyHistory
 from src.grid_meter import DbusGridMeter, GridMeterUnavailable
 from src.live_state import LiveState
+from src.manual_override import InjectionModeOverride, ManualOverride
 from src.opendtu_client import OpenDTUClient, OpenDTUError
+from src import state_store
 
 FAILSAFE_AFTER_CONSECUTIVE_FAILURES = 3
 
@@ -226,6 +228,56 @@ def _off_state_inverters_payload(
     ]
 
 
+def _send_manual_override(
+    client: OpenDTUClient, serials: Iterable[str], pct: float, dry_run: bool = False
+) -> None:
+    """Forces every inverter to the same fixed relative % (dashboard manual
+    test override, src/manual_override.ManualOverride) -- bypasses the PI
+    and water-filling entirely, unlike the normal ON path. Only called once
+    per override activation/change (see run()), not every decision cycle."""
+    if dry_run:
+        log.info("[DRY-RUN] forcage manuel: %.0f%% sur tous les onduleurs (rien envoye)", pct)
+        return
+    log.info("forcage manuel: %.0f%% sur tous les onduleurs", pct)
+    for serial in serials:
+        try:
+            client.set_relative_limit_pct(serial, pct)
+        except OpenDTUError as exc:
+            log.error("forcage manuel: echec %.0f%% sur %s: %s", pct, serial, exc)
+
+
+def _manual_override_payload(
+    client: OpenDTUClient,
+    serials: Iterable[str],
+    pct: float,
+    nominal_power_w: Dict[str, float],
+    name_by_serial: Optional[Dict[str, str]] = None,
+) -> list:
+    name_by_serial = name_by_serial or {}
+    try:
+        live_power_w = client.get_live_power_w(serials)
+    except OpenDTUError:
+        live_power_w = {}
+    try:
+        limit_status = client.get_limit_status()
+    except OpenDTUError:
+        limit_status = {}
+    return [
+        {
+            "serial": serial,
+            "name": name_by_serial.get(serial),
+            "allocated_w": round(pct / 100.0 * nominal_power_w.get(serial, 0.0)),
+            "actual_w": live_power_w.get(serial, 0.0),
+            "limit_relative_pct": (
+                limit_status[serial].limit_relative if serial in limit_status else pct
+            ),
+            "max_power_w": nominal_power_w.get(serial, 0.0),
+            "acknowledged": limit_status[serial].acknowledged if serial in limit_status else None,
+        }
+        for serial in serials
+    ]
+
+
 def _release_for_charging(client: OpenDTUClient, serials: Iterable[str], dry_run: bool = False) -> None:
     """Battery not yet full: release curtailment so PV runs uncapped and the
     Victron ESS/battery charger absorbs the surplus by charging."""
@@ -257,22 +309,40 @@ def run(
     dry_run: bool = False,
     live_state: Optional[LiveState] = None,
     energy_history: Optional[HourlyEnergyHistory] = None,
+    config_path: Optional[str] = None,
+    manual_override: Optional[ManualOverride] = None,
+    injection_mode: Optional[InjectionModeOverride] = None,
 ) -> None:
     if live_state is None:
         live_state = LiveState()
     if energy_history is None:
         energy_history = HourlyEnergyHistory()
+    if manual_override is None:
+        manual_override = ManualOverride()
+    if injection_mode is None:
+        injection_mode = InjectionModeOverride()
     grid_reader = _make_grid_reader(config)
     battery_reader = _make_battery_reader(config)
+    # No persisted state (config_path unset, first run, or corrupt/missing
+    # state.json) defaults to True (curtailing) rather than False: with a
+    # battery reader present, the very next real SOC reading will correct
+    # this within one cycle anyway (hysteresis.update immediately flips to
+    # inactive if soc_pct < deactivate_below_pct), so defaulting "safe"
+    # costs at most one cycle of unnecessary curtailment, whereas
+    # defaulting "not full" risked exactly the stuck-OFF-while-actually-
+    # full scenario this persistence exists to prevent.
+    persisted_active = state_store.load_injection_active(config_path) if config_path else None
     hysteresis = (
         BatteryFullHysteresis(
             config.battery.activate_at_pct,
             config.battery.deactivate_below_pct,
+            active=persisted_active if persisted_active is not None else True,
             export_confirms_full_w=config.battery.export_confirms_full_w,
         )
         if battery_reader is not None
         else None
     )
+    last_persisted_active = persisted_active
     client = OpenDTUClient(
         config.opendtu.base_url, username=config.opendtu.username, password=config.opendtu.password
     )
@@ -294,6 +364,7 @@ def run(
     last_probe_time = 0.0
     consecutive_grid_failures = 0
     released_for_charging = False
+    last_override_pct_sent: Optional[float] = None
 
     while True:
         now = time.monotonic()
@@ -326,7 +397,15 @@ def run(
             if battery_reader is not None:
                 try:
                     soc_pct = battery_reader.read_soc_pct()
-                    injection_active = hysteresis.update(soc_pct, grid_power_w=smoother.average)
+                    mode = injection_mode.get_mode()
+                    if mode == "ON":
+                        hysteresis.active = True
+                        injection_active = True
+                    elif mode == "OFF":
+                        hysteresis.active = False
+                        injection_active = False
+                    else:
+                        injection_active = hysteresis.update(soc_pct, grid_power_w=smoother.average)
                 except BatterySocUnavailable as exc:
                     # Safe default: if we can't tell whether the battery is
                     # full, assume it is and keep injection control active
@@ -341,10 +420,18 @@ def run(
                 except BatterySocUnavailable:
                     battery_power_w = None  # dashboard display only, not safety-critical
 
+                if config_path is not None and hysteresis.active != last_persisted_active:
+                    state_store.save_injection_active(config_path, hysteresis.active)
+                    last_persisted_active = hysteresis.active
+
             if not injection_active:
                 if not released_for_charging:
                     _release_for_charging(client, serials, dry_run=dry_run)
                     released_for_charging = True
+                # So a still-active % override gets re-sent (not skipped as
+                # "already applied") if injection resumes later: the release
+                # above just overwrote whatever it had set.
+                last_override_pct_sent = None
                 live_state.update_decision(
                     soc_pct,
                     "OFF",
@@ -363,25 +450,39 @@ def run(
                     )
             else:
                 released_for_charging = False
-                try:
-                    _decision_cycle(
-                        client,
-                        controller,
-                        capacity,
-                        serials,
-                        grid_power_w,
-                        smoother.average,
-                        live_state=live_state,
-                        soc_pct=soc_pct,
+                override_pct = manual_override.active_pct()
+                if override_pct is not None:
+                    if override_pct != last_override_pct_sent:
+                        _send_manual_override(client, serials, override_pct, dry_run=dry_run)
+                        last_override_pct_sent = override_pct
+                    live_state.update_decision(
+                        soc_pct,
+                        "OVERRIDE",
+                        None,
+                        _manual_override_payload(client, serials, override_pct, nominal_power_w, name_by_serial),
                         battery_power_w=battery_power_w,
-                        dry_run=dry_run,
-                        verbose_traces=config.logging.verbose_traces,
-                        min_inverter_pct=config.control.min_inverter_pct,
-                        name_by_serial=name_by_serial,
                     )
-                except OpenDTUError as exc:
-                    log.error("OpenDTU communication failed: %s", exc)
-                    _apply_failsafe(client, serials, dry_run=dry_run)
+                else:
+                    last_override_pct_sent = None
+                    try:
+                        _decision_cycle(
+                            client,
+                            controller,
+                            capacity,
+                            serials,
+                            grid_power_w,
+                            smoother.average,
+                            live_state=live_state,
+                            soc_pct=soc_pct,
+                            battery_power_w=battery_power_w,
+                            dry_run=dry_run,
+                            verbose_traces=config.logging.verbose_traces,
+                            min_inverter_pct=config.control.min_inverter_pct,
+                            name_by_serial=name_by_serial,
+                        )
+                    except OpenDTUError as exc:
+                        log.error("OpenDTU communication failed: %s", exc)
+                        _apply_failsafe(client, serials, dry_run=dry_run)
 
         if now - last_probe_time >= config.capacity_probe.interval_s:
             last_probe_time = now
@@ -405,14 +506,26 @@ def main() -> None:
     config = load_config(args.config)
     live_state = LiveState()
     energy_history = HourlyEnergyHistory()
+    manual_override = ManualOverride()
+    injection_mode = InjectionModeOverride()
 
     if config.web.enabled:
         from src.webui import start_webui_server
 
-        start_webui_server(args.config, config.web.port, live_state, energy_history)
+        start_webui_server(
+            args.config, config.web.port, live_state, energy_history, manual_override, injection_mode
+        )
         log.info("page de configuration disponible sur http://0.0.0.0:%d/", config.web.port)
 
-    run(config, dry_run=args.dry_run, live_state=live_state, energy_history=energy_history)
+    run(
+        config,
+        dry_run=args.dry_run,
+        live_state=live_state,
+        energy_history=energy_history,
+        config_path=args.config,
+        manual_override=manual_override,
+        injection_mode=injection_mode,
+    )
 
 
 if __name__ == "__main__":

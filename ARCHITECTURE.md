@@ -312,6 +312,51 @@ Toujours logué en `WARNING` (indépendant de `verbose_traces`) et exposé au
 tableau de bord via `LiveState` (`min_inverter_floor_warning`,
 `recommended_min_inverter_pct`), affiché en bandeau tant que actif.
 
+## Contrôles manuels du tableau de bord
+
+Deux mécanismes distincts, tous deux dans `src/manual_override.py`, tous
+deux lus une fois par cycle de décision dans `main.run()` (jamais dans la
+boucle rapide) :
+
+- **`InjectionModeOverride`** (AUTO/ON/OFF) : sticky, pas d'expiration.
+  ON/OFF écrivent directement `hysteresis.active` (pas de branche séparée
+  dans `run()`) -- reprendre AUTO relance `hysteresis.update()` normalement
+  à partir de l'état où ON/OFF l'a laissé, pas depuis zéro. Un mode ON/OFF
+  actif s'écrit dans `state.json` comme n'importe quel changement de
+  `hysteresis.active` (voir persistance ci-dessous), donc il survit lui
+  aussi à un redémarrage tant qu'on n'est pas revenu en AUTO.
+- **`ManualOverride`** (25/50/75/100%) : expire après `DEFAULT_DURATION_S`
+  (5 min), pas de persistance (usage: test/diagnostic ponctuel, pas un mode
+  d'exploitation). Contourne entièrement `_decision_cycle`
+  (`main._send_manual_override` + `main._manual_override_payload`) --
+  n'a d'effet que si `injection_active` est vrai ce cycle (mode ON, ou AUTO
+  avec hystérèse active) ; si `injection_active` est faux (charge batterie
+  prioritaire, via AUTO ou mode OFF), le déblocage à 100% reste prioritaire
+  et l'override est ignoré pour ce cycle (mais reste actif, réappliqué
+  dès qu'`injection_active` redevient vrai -- `last_override_pct_sent` est
+  remis à `None` chaque fois qu'on traverse la branche OFF, pour forcer un
+  ré-envoi plutôt que de croire l'override "déjà appliqué"). N'envoie la
+  commande qu'une fois par changement de valeur (`last_override_pct_sent`),
+  pas à chaque cycle -- cohérent avec le reste du projet ("pas de spam
+  OpenDTU par tick"). Le fail-safe (perte du compteur réseau) est vérifié
+  plus haut dans la boucle et `continue` avant d'atteindre cette logique --
+  les deux contrôles manuels lui sont donc structurellement subordonnés,
+  pas par convention.
+
+## Persistance de l'hystérèse batterie (`state.json`)
+
+`src/state_store.py` écrit `{"injection_active": bool}` dans
+`state.json`, à côté de `config.json`, chaque fois que `hysteresis.active`
+change de valeur (pas à chaque cycle -- évite l'usure flash sur une
+carte SD/eMMC). Lu au démarrage pour initialiser
+`BatteryFullHysteresis(active=...)` ; en l'absence d'état persisté
+(première exécution, fichier manquant/corrompu), démarre à `True`
+(curtailment) plutôt que `False` -- une lecture SOC réelle corrige ça en
+un cycle si la batterie n'est en fait pas pleine (`hysteresis.update`
+repasse `active` à `False` dès que `soc_pct < deactivate_below_pct`), donc
+le coût d'un mauvais default "sûr" est au plus un cycle, contre un risque
+réel d'export prolongé si le default "pas sûr" (`False`) est faux.
+
 ## API OpenDTU utilisée
 
 - `GET /api/livedata/status?inv=<serial>` → puissance AC actuelle

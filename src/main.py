@@ -16,6 +16,7 @@ from src.allocator import water_fill_allocate
 from src.battery_soc import BatterySocUnavailable, DbusBatterySoc
 from src.config import AppConfig, load_config
 from src.controller import BatteryFullHysteresis, CapacityEstimator, GridPowerSmoother, SoftTargetController
+from src.energy_history import HourlyEnergyHistory
 from src.grid_meter import DbusGridMeter, GridMeterUnavailable
 from src.live_state import LiveState
 from src.opendtu_client import OpenDTUClient, OpenDTUError
@@ -33,6 +34,7 @@ def _make_grid_reader(config: AppConfig):
             host=config.grid.modbus.host,
             port=config.grid.modbus.port,
             unit_id=config.grid.modbus.unit_id,
+            energy_unit_id=config.grid.modbus.energy_unit_id,
         )
     return DbusGridMeter()
 
@@ -64,7 +66,9 @@ def _decision_cycle(
     dry_run: bool = False,
     verbose_traces: bool = True,
     min_inverter_pct: float = 0.0,
+    name_by_serial: Optional[Dict[str, str]] = None,
 ) -> None:
+    name_by_serial = name_by_serial or {}
     live_power_w = client.get_live_power_w()
     limit_status = client.get_limit_status()
 
@@ -93,6 +97,7 @@ def _decision_cycle(
             [
                 {
                     "serial": serial,
+                    "name": name_by_serial.get(serial),
                     "allocated_w": rounded_allocation.get(serial, 0),
                     "actual_w": live_power_w.get(serial, 0.0),
                     "limit_relative_pct": (
@@ -137,13 +142,17 @@ def _decision_cycle(
 
 
 def _off_state_inverters_payload(
-    client: OpenDTUClient, serials: Iterable[str], nominal_power_w: Dict[str, float]
+    client: OpenDTUClient,
+    serials: Iterable[str],
+    nominal_power_w: Dict[str, float],
+    name_by_serial: Optional[Dict[str, str]] = None,
 ) -> list:
     """Live per-inverter power for the dashboard while injection control is
     OFF (charge batterie prioritaire): inverters are uncapped, so there is
     no allocated/limit-status data to report, but the actual measured power
     is still meaningful and otherwise leaves the dashboard looking empty/
     broken during the whole charge-priority window."""
+    name_by_serial = name_by_serial or {}
     try:
         live_power_w = client.get_live_power_w()
     except OpenDTUError:
@@ -151,6 +160,7 @@ def _off_state_inverters_payload(
     return [
         {
             "serial": serial,
+            "name": name_by_serial.get(serial),
             "allocated_w": None,
             "actual_w": live_power_w.get(serial, 0.0),
             "limit_relative_pct": 100,
@@ -187,9 +197,16 @@ def _apply_failsafe(client: OpenDTUClient, serials: Iterable[str], dry_run: bool
             log.error("fail-safe curtail of %s failed: %s", serial, exc)
 
 
-def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState] = None) -> None:
+def run(
+    config: AppConfig,
+    dry_run: bool = False,
+    live_state: Optional[LiveState] = None,
+    energy_history: Optional[HourlyEnergyHistory] = None,
+) -> None:
     if live_state is None:
         live_state = LiveState()
+    if energy_history is None:
+        energy_history = HourlyEnergyHistory()
     grid_reader = _make_grid_reader(config)
     battery_reader = _make_battery_reader(config)
     hysteresis = (
@@ -210,6 +227,7 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
         min_change_w=config.control.min_change_w,
     )
     nominal_power_w: Dict[str, float] = {inv.serial: inv.nominal_power_w for inv in config.inverters}
+    name_by_serial: Dict[str, str] = {inv.serial: inv.name for inv in config.inverters if inv.name}
     capacity = CapacityEstimator(nominal_power_w, config.capacity_probe.step_w)
     serials = [inv.serial for inv in config.inverters]
 
@@ -236,6 +254,12 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
 
         if now - last_decision_time >= config.control.decision_interval_s:
             last_decision_time = now
+
+            try:
+                from_kwh, to_kwh = grid_reader.read_energy_kwh()
+                energy_history.record(from_kwh, to_kwh)
+            except GridMeterUnavailable as exc:
+                log.error("grid energy counters read failed (dashboard display only): %s", exc)
 
             soc_pct: Optional[float] = None
             battery_power_w: Optional[float] = None
@@ -266,7 +290,7 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
                     soc_pct,
                     "OFF",
                     None,
-                    _off_state_inverters_payload(client, serials, nominal_power_w),
+                    _off_state_inverters_payload(client, serials, nominal_power_w, name_by_serial),
                     battery_power_w=battery_power_w,
                 )
                 if config.logging.verbose_traces:
@@ -294,6 +318,7 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
                         dry_run=dry_run,
                         verbose_traces=config.logging.verbose_traces,
                         min_inverter_pct=config.control.min_inverter_pct,
+                        name_by_serial=name_by_serial,
                     )
                 except OpenDTUError as exc:
                     log.error("OpenDTU communication failed: %s", exc)
@@ -320,14 +345,15 @@ def main() -> None:
 
     config = load_config(args.config)
     live_state = LiveState()
+    energy_history = HourlyEnergyHistory()
 
     if config.web.enabled:
         from src.webui import start_webui_server
 
-        start_webui_server(args.config, config.web.port, live_state)
+        start_webui_server(args.config, config.web.port, live_state, energy_history)
         log.info("page de configuration disponible sur http://0.0.0.0:%d/", config.web.port)
 
-    run(config, dry_run=args.dry_run, live_state=live_state)
+    run(config, dry_run=args.dry_run, live_state=live_state, energy_history=energy_history)
 
 
 if __name__ == "__main__":

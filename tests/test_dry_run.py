@@ -109,11 +109,13 @@ def test_normal_release_for_charging_unlocks_every_inverter_to_100():
 
 def test_off_state_inverters_payload_reports_actual_power_uncapped():
     client = FakeOpenDTUClient(live_power_w={"a": 210.0, "b": 95.0}, limit_status={})
-    payload = _off_state_inverters_payload(client, ["a", "b"], nominal_power_w={"a": 600.0, "b": 400.0})
+    payload = _off_state_inverters_payload(
+        client, ["a", "b"], nominal_power_w={"a": 600.0, "b": 400.0}, name_by_serial={"a": "Toit Sud"}
+    )
     assert payload == [
-        {"serial": "a", "allocated_w": None, "actual_w": 210.0, "limit_relative_pct": 100,
+        {"serial": "a", "name": "Toit Sud", "allocated_w": None, "actual_w": 210.0, "limit_relative_pct": 100,
          "max_power_w": 600.0, "acknowledged": None},
-        {"serial": "b", "allocated_w": None, "actual_w": 95.0, "limit_relative_pct": 100,
+        {"serial": "b", "name": None, "allocated_w": None, "actual_w": 95.0, "limit_relative_pct": 100,
          "max_power_w": 400.0, "acknowledged": None},
     ]
 

@@ -133,16 +133,28 @@ l'état courant du pilotage sans avoir à lire les logs :
 
 - Tuiles : puissance réseau brute et EMA, SOC et puissance batterie (si
   activé), état `injection_control` (ON/OFF), consigne totale.
-- Quatre graphiques (mise à jour toutes les 2 s, ~30 min d'historique
+- Trois graphiques (mise à jour toutes les 2 s, ~30 min d'historique
   conservées en mémoire côté service — perdu à chaque redémarrage) : SOC
-  batterie, puissance batterie (positif = charge, négatif = décharge),
-  puissance réseau brute + EMA sur le même graphe, puissance réelle par
+  batterie ; puissance réseau brute + EMA et puissance batterie sur le même
+  graphe (positif = charge, négatif = décharge) ; puissance réelle par
   onduleur.
-- Tableau détaillé par onduleur (puissance, % de limite, puissance
-  nominale, statut d'acquittement OpenDTU).
+- Molette pour zoomer, glisser pour déplacer, double-clic ou bouton
+  "Réinitialiser le zoom" pour revenir à la vue complète — synchronisé sur
+  les trois graphiques (même fenêtre temporelle partout).
+- Tableau détaillé par onduleur (nom si renseigné, puissance, % de limite,
+  puissance nominale, statut d'acquittement OpenDTU).
+- Graphique en barres "Énergie réseau par heure" (soutirée / injectée, en
+  kWh, ~48 h d'historique) — lu depuis les compteurs cumulatifs du
+  compteur réseau, indépendamment de la boucle de pilotage.
 - Aucune dépendance externe (pas de librairie de graphiques chargée depuis
   un CDN — tracé en `<canvas>` HTML5 fait main), cohérent avec l'absence
   d'accès internet garanti sur le Cerbo GX.
+
+Pour le graphique d'énergie horaire en déploiement VM/Modbus, si les valeurs
+restent à 0 ou en erreur : le compteur réseau a son propre service Modbus
+(`com.victronenergy.grid`), distinct de l'agrégat système (`unit_id`) —
+vérifier `config.grid.modbus.energy_unit_id` (Settings > Services > Modbus
+TCP sur le Cerbo GX, chercher la ligne du compteur réseau, pas "system").
 
 ## Installation
 

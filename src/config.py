@@ -22,6 +22,14 @@ class ModbusGridConfig:
     host: str
     port: int = 502
     unit_id: int = 100  # com.victronenergy.system aggregate service - fixed, no per-install lookup needed
+    # Unit ID of the grid meter's OWN com.victronenergy.grid service (used
+    # only for the energy import/export counters, registers 2634/2636) --
+    # this is the meter's per-install VRM device instance, NOT guaranteed to
+    # equal unit_id above. Defaults to unit_id if unset (works when both
+    # happen to coincide on a given install; override via config.grid.modbus
+    # .energy_unit_id if not -- check Settings > Services > Modbus TCP on
+    # the Cerbo GX for the grid meter's actual unit ID).
+    energy_unit_id: Optional[int] = None
 
 
 @dataclass
@@ -77,6 +85,10 @@ class BatteryConfig:
 class InverterConfig:
     serial: str
     nominal_power_w: float
+    # Display only (dashboard legend/table) -- never used to address the
+    # inverter, OpenDTU is only ever talked to by serial. Optional: falls
+    # back to the serial itself wherever it's shown if unset.
+    name: Optional[str] = None
 
 
 @dataclass
@@ -126,7 +138,11 @@ def parse_config(raw: dict) -> AppConfig:
     if "opendtu" not in raw or "base_url" not in raw["opendtu"]:
         raise ValueError("config.opendtu.base_url is required")
     inverters = [
-        InverterConfig(serial=str(inv["serial"]), nominal_power_w=float(inv["nominal_power_w"]))
+        InverterConfig(
+            serial=str(inv["serial"]),
+            nominal_power_w=float(inv["nominal_power_w"]),
+            name=(str(inv["name"]) if inv.get("name") else None),
+        )
         for inv in raw.get("inverters", [])
     ]
     if not inverters:
@@ -147,10 +163,12 @@ def parse_config(raw: dict) -> AppConfig:
         modbus_raw = grid_raw.get("modbus") or {}
         if "host" not in modbus_raw:
             raise ValueError("config.grid.modbus.host is required when grid.source == 'modbus'")
+        energy_unit_id_raw = modbus_raw.get("energy_unit_id")
         modbus_cfg = ModbusGridConfig(
             host=str(modbus_raw["host"]),
             port=int(modbus_raw.get("port", 502)),
             unit_id=int(modbus_raw.get("unit_id", 100)),
+            energy_unit_id=int(energy_unit_id_raw) if energy_unit_id_raw is not None else None,
         )
 
     opendtu_raw = raw["opendtu"]

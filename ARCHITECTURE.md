@@ -139,6 +139,62 @@ soit ce réglage. Les logs d'erreur/avertissement et les actions ponctuelles
 (fail-safe, déblocage charge batterie, redémarrage via "Enregistrer et
 appliquer") ne sont jamais concernés par ce réglage.
 
+La puissance batterie est tracée sur le même graphique que la puissance
+réseau (pas un graphique séparé) : même grandeur physique (W), donc un seul
+axe Y, cohérent avec la règle "jamais de double axe" -- brut/EMA/batterie
+sont juste trois séries du même graphique.
+
+Zoom/déplacement (molette / glisser-déposer / double-clic pour
+réinitialiser) est une fenêtre `viewTMin`/`viewTMax` partagée (variables
+JS globales de la page, pas côté serveur) appliquée aux trois graphiques
+temporels (SOC, réseau+batterie, onduleurs) -- jamais au graphique en
+barres horaire, déjà agrégé à l'heure donc rien à zoomer. `drawChart`
+recalcule l'axe Y sur les seuls points visibles dans la fenêtre courante
+(pas sur tout l'historique), avec repli sur l'ensemble complet si la
+fenêtre ne contient aucun point pour une série. Les bornes de pan/zoom sont
+bornées à l'étendue réelle de `history` (`clampView`) -- on ne peut jamais
+dézoomer au-delà des données disponibles ni glisser dans le vide.
+
+`config.inverters[].name` (optionnel) est affiché à la place du numéro de
+série dans la légende/le tableau du tableau de bord (repli sur le numéro
+de série si absent) -- jamais utilisé pour adresser l'onduleur cote
+OpenDTU, qui reste toujours identifié par son numéro de série. Rempli
+automatiquement par le bouton "Charger la liste depuis OpenDTU" (le nom
+vient de `/api/livedata/status`), modifiable à la main.
+
+### Energie reseau horaire (graphique en barres)
+
+`src/grid_meter.py` (`read_grid_energy_kwh`, D-Bus) et
+`src/grid_meter_modbus.py` (`ModbusGridMeter.read_energy_kwh`, Modbus TCP)
+lisent les compteurs cumulatifs d'énergie importée/exportée du compteur
+réseau : `/Ac/Energy/Forward` et `/Ac/Energy/Reverse`. Côté Modbus, ce sont
+les registres **2634/2636** (`Total Energy from/to net`, `uint32`, échelle
+100 -> kWh, mot de poids fort au registre de plus basse adresse) --
+délibérément pas les registres 2603/2606 (`Grid L1 - Energy from/to net`,
+`uint16`, plafonné à 655.35 kWh puis rebouclé à 0), pour une installation
+monophasée "L1" et "Total" sont la même grandeur physique mais seul le
+`uint32` évite le rebouclage. Ces registres appartiennent au service
+**propre du compteur réseau** (`com.victronenergy.grid`), pas à l'agrégat
+`com.victronenergy.system` (unit ID 100) utilisé partout ailleurs dans ce
+projet -- leur unit ID est le device instance VRM du compteur, propre à
+chaque installation. `config.grid.modbus.energy_unit_id` (optionnel)
+permet de le distinguer de `unit_id` si les deux diffèrent ; par défaut
+il vaut `unit_id`, ce qui suffit quand les deux services partagent le même
+unit ID sur une installation donnée.
+
+`src/energy_history.py` (`HourlyEnergyHistory`) transforme ces compteurs
+cumulatifs en barres horaires : `record(from_kwh, to_kwh)` calcule le delta
+depuis la dernière lecture et l'ajoute au bucket de l'heure (horloge murale
+locale) en cours. Un delta négatif (compteur remplacé/réinitialisé) est
+ignoré plutôt que d'afficher une barre négative absurde ; la toute première
+lecture après un (re)démarrage crée un bucket vide plutôt que d'attribuer
+tout l'historique du compteur à une seule heure. Thread-safe comme
+`LiveState`, même cycle de vie (perdu à chaque redémarrage), exposé via le
+même endpoint `GET /status.json` (clé `hourly_energy`) pour éviter un
+second polling côté client. Dessiné par `drawBarChart` (fonction dédiée,
+distincte de `drawChart` -- barres groupées par heure, pas de fenêtre
+temporelle continue).
+
 ## Convention de signe
 
 `/Ac/Power` du compteur réseau : **positif = soutirage réseau (import),

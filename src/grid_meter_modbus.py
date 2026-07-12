@@ -27,6 +27,21 @@ from src.grid_meter import GridMeterUnavailable
 SYSTEM_UNIT_ID = 100
 GRID_L1_POWER_REGISTER = 820
 
+# com.victronenergy.grid (the meter's OWN Modbus service, not the fixed
+# com.victronenergy.system aggregate used above) -- unit ID is the meter's
+# per-install VRM device instance, NOT guaranteed to be 100. Confirmed
+# against Victron's official CCGX-Modbus-TCP-register-list.xlsx:
+# - 2634/2635 = Total Energy from net (/Ac/Energy/Forward), uint32, scale
+#   100 -> kWh. Deliberately NOT the per-phase 2603 (uint16, wraps at
+#   655.35 kWh) -- this project is single-phase so "L1" and "Total" are the
+#   same physical quantity, and uint32 avoids the wraparound entirely.
+# - 2636/2637 = Total Energy to net (/Ac/Energy/Reverse), same scale/type.
+# 32-bit values are big-endian at the word level (first/lower-address
+# register holds the high 16 bits), the common convention for Victron's
+# Modbus-TCP registers.
+ENERGY_FROM_NET_REGISTER = 2634
+ENERGY_TO_NET_REGISTER = 2636
+
 
 def _to_signed_int16(raw: int) -> int:
     """pymodbus returns registers as unsigned 16-bit; Victron's are signed."""
@@ -53,10 +68,22 @@ def _read_holding_registers(client, address: int, count: int, unit_id: int):
 
 
 class ModbusGridMeter:
-    def __init__(self, host: str, port: int = 502, unit_id: int = SYSTEM_UNIT_ID, timeout_s: float = 5.0):
+    def __init__(
+        self,
+        host: str,
+        port: int = 502,
+        unit_id: int = SYSTEM_UNIT_ID,
+        timeout_s: float = 5.0,
+        energy_unit_id: Optional[int] = None,
+    ):
         self.host = host
         self.port = port
         self.unit_id = unit_id
+        # Defaults to unit_id -- on installs where the grid meter's own
+        # com.victronenergy.grid service happens to share the same Modbus
+        # unit ID as the system aggregate, no separate config is needed;
+        # override only if that's not the case on a given install.
+        self.energy_unit_id = energy_unit_id if energy_unit_id is not None else unit_id
         self.timeout_s = timeout_s
         self._client = None
 
@@ -78,6 +105,24 @@ class ModbusGridMeter:
         if result is None or result.isError():
             raise GridMeterUnavailable(f"Modbus read error from {self.host}:{self.port}: {result}")
         return float(_to_signed_int16(result.registers[0]))
+
+    def _read_uint32_kwh(self, register: int) -> float:
+        client = self._connected_client()
+        try:
+            result = _read_holding_registers(client, register, 2, self.energy_unit_id)
+        except Exception as exc:  # pymodbus exception types vary by version/transport error
+            raise GridMeterUnavailable(f"Modbus read failed: {exc}") from exc
+        if result is None or result.isError():
+            raise GridMeterUnavailable(f"Modbus read error from {self.host}:{self.port}: {result}")
+        high, low = result.registers[0], result.registers[1]
+        return ((high << 16) | low) / 100.0
+
+    def read_energy_kwh(self) -> "tuple[float, float]":
+        """Returns (energy_from_net_kwh, energy_to_net_kwh) -- cumulative
+        totals since the meter's own counter was last reset, not a rate."""
+        from_kwh = self._read_uint32_kwh(ENERGY_FROM_NET_REGISTER)
+        to_kwh = self._read_uint32_kwh(ENERGY_TO_NET_REGISTER)
+        return from_kwh, to_kwh
 
     def close(self) -> None:
         if self._client is not None:

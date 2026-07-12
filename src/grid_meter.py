@@ -16,6 +16,8 @@ from typing import Optional
 
 GRID_SERVICE_PREFIX = "com.victronenergy.grid."
 BUS_ITEM_IFACE = "com.victronenergy.BusItem"
+ENERGY_FORWARD_PATH = "/Ac/Energy/Forward"  # cumulative kWh imported from the grid
+ENERGY_REVERSE_PATH = "/Ac/Energy/Reverse"  # cumulative kWh exported to the grid
 
 
 class GridMeterUnavailable(Exception):
@@ -35,20 +37,35 @@ def find_grid_service(bus) -> Optional[str]:
     return None
 
 
-def read_grid_power_w(bus, service_name: Optional[str] = None) -> float:
+def _read_bus_item(bus, service: str, path: str) -> float:
     import dbus
 
+    try:
+        obj = bus.get_object(service, path)
+        value = dbus.Interface(obj, BUS_ITEM_IFACE).GetValue()
+    except dbus.DBusException as exc:
+        raise GridMeterUnavailable(f"failed to read {service}{path}: {exc}") from exc
+    if value is None:
+        raise GridMeterUnavailable(f"{service}{path} is invalid (no meter data)")
+    return float(value)
+
+
+def read_grid_power_w(bus, service_name: Optional[str] = None) -> float:
     service = service_name or find_grid_service(bus)
     if service is None:
         raise GridMeterUnavailable(f"no {GRID_SERVICE_PREFIX}* service found on D-Bus")
-    try:
-        obj = bus.get_object(service, "/Ac/Power")
-        value = dbus.Interface(obj, BUS_ITEM_IFACE).GetValue()
-    except dbus.DBusException as exc:
-        raise GridMeterUnavailable(f"failed to read {service}/Ac/Power: {exc}") from exc
-    if value is None:
-        raise GridMeterUnavailable(f"{service}/Ac/Power is invalid (no meter data)")
-    return float(value)
+    return _read_bus_item(bus, service, "/Ac/Power")
+
+
+def read_grid_energy_kwh(bus, service_name: Optional[str] = None) -> "tuple[float, float]":
+    """Returns (energy_from_net_kwh, energy_to_net_kwh) -- cumulative totals
+    since the meter's own counter was last reset, not a rate."""
+    service = service_name or find_grid_service(bus)
+    if service is None:
+        raise GridMeterUnavailable(f"no {GRID_SERVICE_PREFIX}* service found on D-Bus")
+    from_kwh = _read_bus_item(bus, service, ENERGY_FORWARD_PATH)
+    to_kwh = _read_bus_item(bus, service, ENERGY_REVERSE_PATH)
+    return from_kwh, to_kwh
 
 
 class DbusGridMeter:
@@ -62,3 +79,8 @@ class DbusGridMeter:
         if self._bus is None:
             self._bus = get_system_bus()
         return read_grid_power_w(self._bus, self.service_name)
+
+    def read_energy_kwh(self) -> "tuple[float, float]":
+        if self._bus is None:
+            self._bus = get_system_bus()
+        return read_grid_energy_kwh(self._bus, self.service_name)

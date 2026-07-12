@@ -84,12 +84,14 @@ def _inverter_rows_html(inverters: list) -> str:
         row = (
             '<tr class="inv-row">'
             '<td><input type="text" name="inverter_serial" value="{serial}" required></td>'
+            '<td><input type="text" name="inverter_name" value="{name}" placeholder="(optionnel)"></td>'
             '<td><input type="number" name="inverter_nominal_power_w" value="{power}" '
             'step="1" min="1" required></td>'
             '<td><button type="button" class="remove-btn" onclick="this.closest(\'tr\').remove()">'
             "&times;</button></td></tr>"
         ).format(
             serial=html.escape(str(inv.get("serial", ""))),
+            name=html.escape(str(inv.get("name") or "")),
             power=html.escape(str(inv.get("nominal_power_w", ""))),
         )
         rows.append(row)
@@ -221,6 +223,7 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
   <fieldset>
     <legend>Onduleurs</legend>
     <table id="inv-table">
+      <thead><tr><th>Serie</th><th>Nom</th><th>Puissance nominale (W)</th><th></th></tr></thead>
       <tbody id="inv-tbody">
 {_inverter_rows_html(_dig(raw, "inverters", []))}
       </tbody>
@@ -266,12 +269,13 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
 </form>
 
 <script>
-function addInverterRow(serial, power) {{
+function addInverterRow(serial, power, name) {{
   const tbody = document.getElementById('inv-tbody');
   const tr = document.createElement('tr');
   tr.className = 'inv-row';
   tr.innerHTML = '<td><input type="text" name="inverter_serial" value="' + (serial || '') +
     '" required></td>' +
+    '<td><input type="text" name="inverter_name" value="' + (name || '') + '" placeholder="(optionnel)"></td>' +
     '<td><input type="number" name="inverter_nominal_power_w" value="' + (power || '') +
     '" step="1" min="1" required></td>' +
     '<td><button type="button" class="remove-btn" onclick="this.closest(\\'tr\\').remove()">&times;</button></td>';
@@ -307,9 +311,10 @@ function fetchInverters() {{
         cb.disabled = already;
         cb.dataset.serial = inv.serial;
         cb.dataset.power = inv.max_power_w;
+        cb.dataset.name = inv.name || '';
         cb.onchange = function() {{
           if (this.checked && !existingSerials().includes(this.dataset.serial)) {{
-            addInverterRow(this.dataset.serial, this.dataset.power);
+            addInverterRow(this.dataset.serial, this.dataset.power, this.dataset.name);
             this.disabled = true;
           }}
         }};
@@ -382,31 +387,34 @@ def _render_dashboard_page() -> str:
   #tooltip { position: fixed; display: none; background: var(--text-primary); color: var(--surface-1);
              font-size: 0.78rem; padding: 0.35rem 0.55rem; border-radius: 6px; pointer-events: none;
              z-index: 10; white-space: nowrap; }
+  .chart-box canvas { cursor: grab; }
+  .chart-box canvas.dragging { cursor: grabbing; }
+  #reset-zoom { font-size: 0.8rem; padding: 0.25rem 0.6rem; margin-left: 0.6rem; cursor: pointer; }
 </style>
 </head>
 <body>
 <nav><a href="/">Configuration</a> &middot; <a href="/dashboard">Tableau de bord</a></nav>
 <h1>gx-opendtu - tableau de bord</h1>
-<p class="hint" id="conn-status">Connexion...</p>
+<p class="hint"><span id="conn-status">Connexion...</span>
+  <button type="button" id="reset-zoom" onclick="resetZoom()" style="display:none">Reinitialiser le zoom</button>
+</p>
+<p class="hint">Molette pour zoomer, glisser pour deplacer, double-clic pour reinitialiser --
+synchronise sur les trois graphiques temporels.</p>
 
 <div class="tiles" id="tiles"></div>
 
 <h2>SOC batterie</h2>
 <div class="chart-box"><canvas id="chart-soc"></canvas></div>
 
-<h2>Puissance batterie</h2>
-<div class="chart-box">
-  <canvas id="chart-battery"></canvas>
-  <p class="hint">Positif = charge, negatif = decharge.</p>
-</div>
-
-<h2>Puissance reseau (brut / EMA)</h2>
+<h2>Puissance reseau (brut / EMA) et batterie</h2>
 <div class="chart-box">
   <canvas id="chart-grid"></canvas>
   <div class="legend">
-    <span><span class="dot" style="background:var(--series-1)"></span>Brut</span>
-    <span><span class="dot" style="background:var(--series-2)"></span>EMA (utilisee par le regulateur)</span>
+    <span><span class="dot" style="background:var(--series-1)"></span>Reseau (brut)</span>
+    <span><span class="dot" style="background:var(--series-2)"></span>Reseau (EMA, utilisee par le regulateur)</span>
+    <span><span class="dot" style="background:var(--series-3)"></span>Batterie</span>
   </div>
+  <p class="hint">Batterie : positif = charge, negatif = decharge.</p>
 </div>
 
 <h2>Puissance par onduleur</h2>
@@ -423,6 +431,17 @@ def _render_dashboard_page() -> str:
 <p class="hint">Pendant la charge batterie prioritaire (regulation OFF), "Limite" affiche
 100% (debride) et "Puissance" la production reelle mesuree -- ce n'est pas une commande active.</p>
 
+<h2>Energie reseau par heure</h2>
+<div class="chart-box">
+  <canvas id="chart-energy"></canvas>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--series-1)"></span>Soutiree du reseau</span>
+    <span><span class="dot" style="background:var(--series-2)"></span>Injectee au reseau</span>
+  </div>
+  <p class="hint">Compteurs cumulatifs du compteur reseau (pas de la boucle de pilotage) --
+  l'heure en cours est partielle. Pas de zoom/deplacement sur ce graphique (deja agrege a l'heure).</p>
+</div>
+
 <div id="tooltip"></div>
 
 <script>
@@ -434,10 +453,41 @@ let lastT = 0;
 let history = [];
 const MAX_POINTS = 900;
 let inverterOrder = [];  // stable color assignment, first-seen order
+let inverterNames = {};  // serial -> name, from config (src/config.py InverterConfig.name)
+let hourlyEnergy = [];
+
+function inverterLabel(serial) { return inverterNames[serial] || serial; }
+
+// Shared zoom/pan window, synchronized across all time-series charts. null
+// means "auto, full extent" -- both bounds are epoch seconds so a zoomed-in
+// window stays anchored to real time as new samples arrive, rather than
+// drifting as history grows.
+let viewTMin = null;
+let viewTMax = null;
+let isDragging = false;
+
+function resetZoom() { viewTMin = null; viewTMax = null; renderCharts(); }
+
+function fullHistoryRange() {
+  if (!history.length) return [0, 1];
+  return [history[0].t, history[history.length - 1].t];
+}
+
+function clampView(tMin, tMax) {
+  const [fMin, fMax] = fullHistoryRange();
+  const span = Math.min(tMax - tMin, fMax - fMin);
+  if (span <= 0) return [fMin, fMax];
+  let newMin = tMin, newMax = tMin + span;
+  if (newMin < fMin) { newMin = fMin; newMax = newMin + span; }
+  if (newMax > fMax) { newMax = fMax; newMin = newMax - span; }
+  return [newMin, newMax];
+}
 
 function fmtTime(t) { return new Date(t * 1000).toLocaleTimeString(); }
 function fmtW(v) { return (v === null || v === undefined) ? '-' : Math.round(v) + ' W'; }
 function fmtPct(v) { return (v === null || v === undefined) ? '-' : Math.round(v) + ' %'; }
+function fmtKwh(v) { return (v === null || v === undefined) ? '-' : v.toFixed(2) + ' kWh'; }
+function fmtHour(h) { return new Date(h * 1000).toLocaleTimeString([], { hour: '2-digit' }); }
 
 // "Nice numbers" axis rounding (Heckbert's algorithm): picks bounds/step
 // that are always a round 1/2/5 x 10^n, so gridlines land on 50/100/200/500
@@ -490,10 +540,19 @@ function drawChart(canvas, seriesList, opts) {
     return;
   }
 
-  const tMin = Math.min.apply(null, allPoints.map(p => p.t));
-  const tMax = Math.max.apply(null, allPoints.map(p => p.t));
-  let dataMin = opts.yMin !== undefined ? opts.yMin : Math.min.apply(null, allPoints.map(p => p.v));
-  let dataMax = opts.yMax !== undefined ? opts.yMax : Math.max.apply(null, allPoints.map(p => p.v));
+  const dataTMin = Math.min.apply(null, allPoints.map(p => p.t));
+  const dataTMax = Math.max.apply(null, allPoints.map(p => p.t));
+  const tMin = (opts.viewTMin !== null && opts.viewTMin !== undefined) ? opts.viewTMin : dataTMin;
+  const tMax = (opts.viewTMax !== null && opts.viewTMax !== undefined) ? opts.viewTMax : dataTMax;
+
+  // Y-axis auto-scales to whatever is actually visible in the current
+  // zoom/pan window, not the full history -- falls back to the full set if
+  // the window happens to contain no points for a series (e.g. panned past
+  // the data, or an all-null series like battery power on a no-battery install).
+  const visiblePoints = allPoints.filter(p => p.t >= tMin && p.t <= tMax);
+  const pointsForYRange = visiblePoints.length ? visiblePoints : allPoints;
+  let dataMin = opts.yMin !== undefined ? opts.yMin : Math.min.apply(null, pointsForYRange.map(p => p.v));
+  let dataMax = opts.yMax !== undefined ? opts.yMax : Math.max.apply(null, pointsForYRange.map(p => p.v));
   if (opts.includeZero) { dataMin = Math.min(dataMin, 0); dataMax = Math.max(dataMax, 0); }
   const scale = niceScale(dataMin, dataMax, 5);
   const yMin = scale.min, yMax = scale.max;
@@ -530,6 +589,10 @@ function drawChart(canvas, seriesList, opts) {
     ctx.beginPath(); ctx.moveTo(padding.left, y0); ctx.lineTo(w - padding.right, y0); ctx.stroke();
   }
 
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padding.left, padding.top, plotW, plotH);
+  ctx.clip();
   seriesList.forEach(s => {
     if (!s.points.length) return;
     ctx.strokeStyle = s.color;
@@ -545,13 +608,106 @@ function drawChart(canvas, seriesList, opts) {
     });
     ctx.stroke();
   });
+  ctx.restore();
 
-  canvas._chartData = { seriesList, tMin, tMax, yMin, yMax, padding, plotW, plotH, yFormat: opts.yFormat };
+  canvas._chartData = {
+    seriesList, tMin, tMax, dataTMin, dataTMax, yMin, yMax, padding, plotW, plotH, yFormat: opts.yFormat,
+  };
+}
+
+// Grouped bar chart (two bars per hour: from-net / to-net) -- no zoom/pan,
+// the data is already aggregated to hourly buckets so there's nothing finer
+// to zoom into. Hover shows the exact value for the bar under the cursor
+// (per-mark tooltip, as opposed to drawChart's continuous crosshair).
+function drawBarChart(canvas, buckets, seriesKeys, colors, labels, opts) {
+  opts = opts || {};
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0 || h === 0) return;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const padding = { left: 46, right: 8, top: 8, bottom: 20 };
+  const plotW = w - padding.left - padding.right;
+  const plotH = h - padding.top - padding.bottom;
+
+  ctx.font = '10px system-ui';
+  if (!buckets.length) {
+    ctx.fillStyle = cssVar('--muted');
+    ctx.fillText('en attente de donnees...', padding.left, h / 2);
+    canvas._barData = null;
+    return;
+  }
+
+  const allValues = buckets.flatMap(b => seriesKeys.map(k => b[k]));
+  const scale = niceScale(0, Math.max.apply(null, allValues.concat([0.01])), 5);
+  const yMin = 0, yMax = scale.max;
+  function yPix(v) { return padding.top + (1 - (v - yMin) / ((yMax - yMin) || 1)) * plotH; }
+
+  ctx.strokeStyle = cssVar('--gridline');
+  ctx.fillStyle = cssVar('--muted');
+  ctx.lineWidth = 1;
+  const tickEpsilon = scale.step * 1e-6;
+  for (let v = yMin; v <= yMax + tickEpsilon; v += scale.step) {
+    const y = yPix(v);
+    ctx.beginPath(); ctx.moveTo(padding.left, y); ctx.lineTo(w - padding.right, y); ctx.stroke();
+    ctx.fillText(opts.yFormat ? opts.yFormat(v) : Math.round(v).toString(), 2, y + 3);
+  }
+
+  const slotW = plotW / buckets.length;
+  const groupPad = slotW * 0.15;
+  const barW = (slotW - groupPad * 2) / seriesKeys.length;
+  const bars = [];
+  buckets.forEach((b, i) => {
+    const slotX = padding.left + i * slotW;
+    seriesKeys.forEach((key, k) => {
+      const v = b[key] || 0;
+      const x = slotX + groupPad + k * barW;
+      const y = yPix(v);
+      const barH = (padding.top + plotH) - y;
+      ctx.fillStyle = colors[k];
+      ctx.fillRect(x, y, Math.max(1, barW - 2), barH);
+      bars.push({ x, y, w: barW - 2, h: barH, value: v, label: labels[k], hour: b.hour });
+    });
+  });
+
+  // one label per hour slot (skip some if too narrow to avoid overlap)
+  const labelEvery = Math.max(1, Math.ceil(60 / slotW));
+  ctx.fillStyle = cssVar('--muted');
+  buckets.forEach((b, i) => {
+    if (i % labelEvery !== 0) return;
+    const label = fmtHour(b.hour);
+    const x = padding.left + i * slotW + slotW / 2 - ctx.measureText(label).width / 2;
+    ctx.fillText(label, x, h - 5);
+  });
+
+  canvas._barData = { bars, padding, plotW, plotH };
+}
+
+function attachBarHover(canvas) {
+  const tooltip = document.getElementById('tooltip');
+  canvas.addEventListener('mousemove', (ev) => {
+    const data = canvas._barData;
+    if (!data) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+    const hit = data.bars.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+    if (!hit) { tooltip.style.display = 'none'; return; }
+    tooltip.style.display = 'block';
+    tooltip.style.left = (ev.clientX + 12) + 'px';
+    tooltip.style.top = (ev.clientY - 10) + 'px';
+    tooltip.innerHTML = '<div>' + fmtHour(hit.hour) + '-' + fmtHour(hit.hour + 3600) + '</div>' +
+      '<div>' + hit.label + ': ' + fmtKwh(hit.value) + '</div>';
+  });
+  canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 }
 
 function attachHover(canvas, opts) {
   const tooltip = document.getElementById('tooltip');
   canvas.addEventListener('mousemove', (ev) => {
+    if (isDragging) { tooltip.style.display = 'none'; return; }
     const data = canvas._chartData;
     if (!data) return;
     const rect = canvas.getBoundingClientRect();
@@ -577,14 +733,68 @@ function attachHover(canvas, opts) {
   canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 }
 
+let dragStartX = 0, dragStartTMin = 0, dragStartTMax = 0, dragPlotW = 0;
+
+function attachZoomPan(canvas) {
+  canvas.addEventListener('wheel', (ev) => {
+    const data = canvas._chartData;
+    if (!data) return;
+    ev.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const curTMin = viewTMin !== null ? viewTMin : data.dataTMin;
+    const curTMax = viewTMax !== null ? viewTMax : data.dataTMax;
+    const span = curTMax - curTMin;
+    const cursorT = curTMin + (x - data.padding.left) / data.plotW * span;
+    const fullSpan = data.dataTMax - data.dataTMin;
+    let newSpan = Math.min(span * (ev.deltaY > 0 ? 1.2 : 1 / 1.2), fullSpan);
+    if (newSpan < 10) newSpan = 10;  // floor so scrolling in can't collapse to an unusable sliver
+    const ratio = span > 0 ? (cursorT - curTMin) / span : 0.5;
+    const [newTMin, newTMax] = clampView(cursorT - ratio * newSpan, cursorT - ratio * newSpan + newSpan);
+    if (newSpan >= fullSpan - 1e-6) { viewTMin = null; viewTMax = null; }
+    else { viewTMin = newTMin; viewTMax = newTMax; }
+    renderCharts();
+  }, { passive: false });
+
+  canvas.addEventListener('mousedown', (ev) => {
+    const data = canvas._chartData;
+    if (!data) return;
+    isDragging = true;
+    document.querySelectorAll('.chart-box canvas').forEach(c => c.classList.add('dragging'));
+    dragStartX = ev.clientX;
+    dragStartTMin = viewTMin !== null ? viewTMin : data.dataTMin;
+    dragStartTMax = viewTMax !== null ? viewTMax : data.dataTMax;
+    dragPlotW = data.plotW;
+  });
+
+  canvas.addEventListener('dblclick', () => resetZoom());
+}
+
+document.addEventListener('mousemove', (ev) => {
+  if (!isDragging || dragPlotW === 0) return;
+  const dt = -(ev.clientX - dragStartX) / dragPlotW * (dragStartTMax - dragStartTMin);
+  const [newTMin, newTMax] = clampView(dragStartTMin + dt, dragStartTMax + dt);
+  viewTMin = newTMin; viewTMax = newTMax;
+  renderCharts();
+});
+document.addEventListener('mouseup', () => {
+  if (isDragging) {
+    isDragging = false;
+    document.querySelectorAll('.chart-box canvas').forEach(c => c.classList.remove('dragging'));
+  }
+});
+
 const chartSoc = document.getElementById('chart-soc');
-const chartBattery = document.getElementById('chart-battery');
 const chartGrid = document.getElementById('chart-grid');
 const chartInverters = document.getElementById('chart-inverters');
+const chartEnergy = document.getElementById('chart-energy');
 attachHover(chartSoc, { yFormat: fmtPct });
-attachHover(chartBattery, { yFormat: fmtW });
 attachHover(chartGrid, { yFormat: fmtW });
 attachHover(chartInverters, { yFormat: fmtW });
+attachBarHover(chartEnergy);
+attachZoomPan(chartSoc);
+attachZoomPan(chartGrid);
+attachZoomPan(chartInverters);
 
 function renderTiles(latest) {
   const tiles = document.getElementById('tiles');
@@ -603,48 +813,59 @@ function renderInverterTable(latest) {
   const tbody = document.querySelector('#inverters-table tbody');
   const inverters = (latest && latest.inverters) || [];
   if (!inverters.length) { tbody.innerHTML = '<tr><td colspan="5" class="hint">aucune donnee</td></tr>'; return; }
-  tbody.innerHTML = inverters.map(inv =>
-    '<tr><td>' + inv.serial + '</td>' +
+  tbody.innerHTML = inverters.map(inv => {
+    if (inv.name) inverterNames[inv.serial] = inv.name;
+    return '<tr><td>' + (inv.name ? inv.name + ' <span class="hint">(' + inv.serial + ')</span>' : inv.serial) + '</td>' +
     '<td class="num">' + fmtW(inv.actual_w) + '</td>' +
     '<td class="num">' + fmtPct(inv.limit_relative_pct) + '</td>' +
     '<td class="num">' + fmtW(inv.max_power_w) + '</td>' +
     '<td>' + (inv.acknowledged === false ? 'en attente (RF)' :
-               inv.acknowledged === null ? 'debride (charge batterie)' : 'ok') + '</td></tr>'
-  ).join('');
+               inv.acknowledged === null ? 'debride (charge batterie)' : 'ok') + '</td></tr>';
+  }).join('');
 }
 
 function renderInvertersLegend() {
   const legend = document.getElementById('inverters-legend');
   legend.innerHTML = inverterOrder.map((serial, i) =>
-    '<span><span class="dot" style="background:' + cssVar(SERIES_COLORS[i % SERIES_COLORS.length]) + '"></span>' + serial + '</span>'
+    '<span><span class="dot" style="background:' + cssVar(SERIES_COLORS[i % SERIES_COLORS.length]) + '"></span>' + inverterLabel(serial) + '</span>'
   ).join('');
 }
 
 function renderCharts() {
+  const viewOpts = { viewTMin: viewTMin, viewTMax: viewTMax };
+  const resetBtn = document.getElementById('reset-zoom');
+  resetBtn.style.display = (viewTMin !== null || viewTMax !== null) ? '' : 'none';
+
   const socPoints = history.filter(s => s.soc_pct !== null).map(s => ({ t: s.t, v: s.soc_pct }));
-  drawChart(chartSoc, [{ label: 'SOC', color: cssVar('--series-1'), points: socPoints }], { yMin: 0, yMax: 100, yFormat: fmtPct });
+  drawChart(chartSoc, [{ label: 'SOC', color: cssVar('--series-1'), points: socPoints }],
+    Object.assign({ yMin: 0, yMax: 100, yFormat: fmtPct }, viewOpts));
 
   const batteryPoints = history.filter(s => s.battery_power_w !== null && s.battery_power_w !== undefined)
                                 .map(s => ({ t: s.t, v: s.battery_power_w }));
-  drawChart(chartBattery, [{ label: 'Batterie', color: cssVar('--series-3'), points: batteryPoints }],
-    { yFormat: fmtW, includeZero: true });
-
   drawChart(chartGrid, [
-    { label: 'Brut', color: cssVar('--series-1'), points: history.map(s => ({ t: s.t, v: s.grid_raw_w })) },
-    { label: 'EMA', color: cssVar('--series-2'), points: history.map(s => ({ t: s.t, v: s.grid_ema_w })) },
-  ], { yFormat: fmtW, includeZero: true });
+    { label: 'Reseau (brut)', color: cssVar('--series-1'), points: history.map(s => ({ t: s.t, v: s.grid_raw_w })) },
+    { label: 'Reseau (EMA)', color: cssVar('--series-2'), points: history.map(s => ({ t: s.t, v: s.grid_ema_w })) },
+    { label: 'Batterie', color: cssVar('--series-3'), points: batteryPoints },
+  ], Object.assign({ yFormat: fmtW, includeZero: true }, viewOpts));
 
   history.forEach(s => (s.inverters || []).forEach(inv => {
     if (!inverterOrder.includes(inv.serial)) inverterOrder.push(inv.serial);
+    if (inv.name) inverterNames[inv.serial] = inv.name;
   }));
   const invSeries = inverterOrder.map((serial, i) => ({
-    label: serial,
+    label: inverterLabel(serial),
     color: cssVar(SERIES_COLORS[i % SERIES_COLORS.length]),
     points: history.filter(s => (s.inverters || []).some(inv => inv.serial === serial))
                    .map(s => ({ t: s.t, v: s.inverters.find(inv => inv.serial === serial).actual_w })),
   }));
-  drawChart(chartInverters, invSeries, { yFormat: fmtW });
+  drawChart(chartInverters, invSeries, Object.assign({ yFormat: fmtW }, viewOpts));
   renderInvertersLegend();
+
+  drawBarChart(
+    chartEnergy, hourlyEnergy, ['from_kwh', 'to_kwh'],
+    [cssVar('--series-1'), cssVar('--series-2')], ['Soutiree', 'Injectee'],
+    { yFormat: fmtKwh }
+  );
 }
 
 function poll() {
@@ -657,6 +878,7 @@ function poll() {
         if (history.length > MAX_POINTS) history.splice(0, history.length - MAX_POINTS);
         lastT = data.history[data.history.length - 1].t;
       }
+      if (data.hourly_energy) hourlyEnergy = data.hourly_energy;
       renderTiles(data.latest);
       renderInverterTable(data.latest);
       renderCharts();
@@ -680,12 +902,16 @@ def _form_to_raw(form: dict) -> dict:
 
     serials = form.get("inverter_serial", [])
     powers = form.get("inverter_nominal_power_w", [])
+    names = form.get("inverter_name", [])
     inverters = []
-    for serial, power in zip(serials, powers):
+    for i, serial in enumerate(serials):
         serial = serial.strip()
         if not serial:
             continue
-        inverters.append({"serial": serial, "nominal_power_w": float(power)})
+        name = names[i].strip() if i < len(names) else ""
+        inverters.append(
+            {"serial": serial, "nominal_power_w": float(powers[i]), "name": name or None}
+        )
 
     raw = {
         "opendtu": {
@@ -743,7 +969,7 @@ def _write_raw(config_path: str, raw: dict) -> None:
     os.replace(tmp_path, config_path)
 
 
-def _make_handler(config_path: str, live_state):
+def _make_handler(config_path: str, live_state, energy_history):
     class ConfigHandler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # noqa: A003 - quiet down default per-request stderr logging
             pass
@@ -785,7 +1011,9 @@ def _make_handler(config_path: str, live_state):
                 since = float((query.get("since") or ["0"])[0])
             except ValueError:
                 since = 0.0
-            self._send_json(live_state.snapshot_since(since))
+            payload = live_state.snapshot_since(since)
+            payload["hourly_energy"] = energy_history.snapshot()
+            self._send_json(payload)
 
         def _handle_fetch_inverters(self, query: dict) -> None:
             base_url = (query.get("base_url") or [""])[0].strip()
@@ -849,8 +1077,8 @@ def _make_handler(config_path: str, live_state):
     return ConfigHandler
 
 
-def start_webui_server(config_path: str, port: int, live_state) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("0.0.0.0", port), _make_handler(config_path, live_state))
+def start_webui_server(config_path: str, port: int, live_state, energy_history) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(("0.0.0.0", port), _make_handler(config_path, live_state, energy_history))
     thread = threading.Thread(target=server.serve_forever, name="gx-opendtu-webui", daemon=True)
     thread.start()
     return server

@@ -218,6 +218,11 @@ def _render_page(raw: dict, error: str = "", message: str = "") -> str:
     <input type="number" step="any" name="battery.activate_at_pct" value="{val('battery.activate_at_pct', '100')}" required>
     <label>Seuil de desactivation SOC (%)</label>
     <input type="number" step="any" name="battery.deactivate_below_pct" value="{val('battery.deactivate_below_pct', '98')}" required>
+    <label>Export confirmant la batterie pleine (W)</label>
+    <input type="number" step="any" min="0" name="battery.export_confirms_full_w" value="{val('battery.export_confirms_full_w', '50')}" required>
+    <p class="hint">Passe en regulation ON dès qu'un export reseau reel d'au moins cette puissance
+    est observe alors que le SOC est deja au-dessus du seuil de desactivation -- evite d'attendre
+    que le SOC atteigne pile le seuil d'activation. Mettre 0 pour desactiver.</p>
   </fieldset>
 
   <fieldset>
@@ -961,6 +966,7 @@ def _form_to_raw(form: dict) -> dict:
             "enabled": "battery.enabled" in form,
             "activate_at_pct": float(first("battery.activate_at_pct", "100")),
             "deactivate_below_pct": float(first("battery.deactivate_below_pct", "98")),
+            "export_confirms_full_w": float(first("battery.export_confirms_full_w", "50")),
         },
         "web": {
             "enabled": "web.enabled" in form,

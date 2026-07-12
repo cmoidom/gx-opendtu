@@ -69,7 +69,7 @@ def _decision_cycle(
     name_by_serial: Optional[Dict[str, str]] = None,
 ) -> None:
     name_by_serial = name_by_serial or {}
-    live_power_w = client.get_live_power_w()
+    live_power_w = client.get_live_power_w(serials)
     limit_status = client.get_limit_status()
 
     current_total_actual_w = sum(live_power_w.get(s, 0.0) for s in serials)
@@ -209,7 +209,7 @@ def _off_state_inverters_payload(
     broken during the whole charge-priority window."""
     name_by_serial = name_by_serial or {}
     try:
-        live_power_w = client.get_live_power_w()
+        live_power_w = client.get_live_power_w(serials)
     except OpenDTUError:
         return []
     return [
@@ -265,7 +265,11 @@ def run(
     grid_reader = _make_grid_reader(config)
     battery_reader = _make_battery_reader(config)
     hysteresis = (
-        BatteryFullHysteresis(config.battery.activate_at_pct, config.battery.deactivate_below_pct)
+        BatteryFullHysteresis(
+            config.battery.activate_at_pct,
+            config.battery.deactivate_below_pct,
+            export_confirms_full_w=config.battery.export_confirms_full_w,
+        )
         if battery_reader is not None
         else None
     )
@@ -322,7 +326,7 @@ def run(
             if battery_reader is not None:
                 try:
                     soc_pct = battery_reader.read_soc_pct()
-                    injection_active = hysteresis.update(soc_pct)
+                    injection_active = hysteresis.update(soc_pct, grid_power_w=smoother.average)
                 except BatterySocUnavailable as exc:
                     # Safe default: if we can't tell whether the battery is
                     # full, assume it is and keep injection control active

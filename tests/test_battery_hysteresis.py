@@ -50,3 +50,39 @@ def test_initial_active_state_can_be_seeded():
     h = _make(active=True)
     assert h.update(99) is True
     assert h.update(97) is False
+
+
+def test_export_while_soc_near_full_activates_early():
+    # SOC hasn't reached 100 yet, but real export at 98%+ proves the
+    # battery can't absorb more -- e.g. a latch that reset to inactive on
+    # restart while the battery was already full.
+    h = _make()
+    assert h.update(99, grid_power_w=-60.0) is True
+
+
+def test_export_below_deactivate_threshold_does_not_activate_early():
+    h = _make()
+    assert h.update(97, grid_power_w=-60.0) is False
+
+
+def test_small_export_does_not_activate_early():
+    h = _make()  # default export_confirms_full_w=50.0
+    assert h.update(99, grid_power_w=-20.0) is False
+
+
+def test_import_does_not_activate_early():
+    h = _make()
+    assert h.update(99, grid_power_w=30.0) is False
+
+
+def test_no_grid_power_reading_falls_back_to_soc_only():
+    h = _make()
+    assert h.update(99, grid_power_w=None) is False
+    assert h.update(99) is False
+
+
+def test_export_confirms_full_disabled_when_threshold_is_zero():
+    h = BatteryFullHysteresis(
+        activate_at_pct=100.0, deactivate_below_pct=98.0, export_confirms_full_w=0.0
+    )
+    assert h.update(99, grid_power_w=-500.0) is False

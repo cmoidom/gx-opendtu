@@ -79,6 +79,11 @@ class BatteryConfig:
     enabled: bool = False
     activate_at_pct: float = 100.0
     deactivate_below_pct: float = 98.0
+    # Activates injection control early (without waiting for SOC to reach
+    # activate_at_pct exactly) if real grid export beyond this magnitude
+    # (W) is observed while SOC is already >= deactivate_below_pct --
+    # empirical proof the battery can't absorb more. 0 disables this.
+    export_confirms_full_w: float = 50.0
 
 
 @dataclass
@@ -202,6 +207,7 @@ def parse_config(raw: dict) -> AppConfig:
             enabled=bool(battery_raw.get("enabled", False)),
             activate_at_pct=float(battery_raw.get("activate_at_pct", 100.0)),
             deactivate_below_pct=float(battery_raw.get("deactivate_below_pct", 98.0)),
+            export_confirms_full_w=float(battery_raw.get("export_confirms_full_w", 50.0)),
         ),
         web=WebConfig(
             enabled=bool(web_raw.get("enabled", True)),

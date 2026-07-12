@@ -314,7 +314,17 @@ tableau de bord via `LiveState` (`min_inverter_floor_warning`,
 
 ## API OpenDTU utilisée
 
-- `GET /api/livedata/status` → puissance AC actuelle par `serial`.
+- `GET /api/livedata/status?inv=<serial>` → puissance AC actuelle
+  (`AC.0.Power`), **un appel par onduleur**. L'appel nu (sans `?inv=`) ne
+  renvoie jamais le détail AC/DC par onduleur (seulement
+  serial/nom/`limit_relative`/joignabilité + un `total.Power` agrégé) --
+  confirmé contre la doc officielle OpenDTU et un onduleur produisant
+  réellement 700+W qui relisait 0 par l'appel nu. `get_live_power_w`
+  (`src/opendtu_client.py`) fait donc N requêtes (une par serial), pas une
+  requête groupée -- ça a longtemps corrompu `current_total_actual_w` (PI)
+  et `CapacityEstimator.observe` (qui voyait "actual toujours 0 < alloué"
+  et effondrait le plafond de capacité en permanence, quelle que soit la
+  production réelle).
 - `GET /api/limit/status` → `{serial: {limit_relative, max_power,
   limit_set_status}}`. `limit_set_status` passe `Pending` → `Ok` après
   acquittement RF (latence de quelques secondes, normal pour du sub-GHz).

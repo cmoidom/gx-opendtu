@@ -15,7 +15,7 @@ def _fake_response(payload: bytes):
 def test_get_sends_basic_auth_header_when_credentials_set(mock_urlopen):
     mock_urlopen.return_value = _fake_response(b'{"inverters": []}')
     client = OpenDTUClient("http://192.168.1.50", username="admin", password="secret")
-    client.get_live_power_w()
+    client.get_live_power_w(["123"])
 
     sent_request = mock_urlopen.call_args[0][0]
     assert sent_request.get_header("Authorization") == "Basic YWRtaW46c2VjcmV0"
@@ -25,7 +25,7 @@ def test_get_sends_basic_auth_header_when_credentials_set(mock_urlopen):
 def test_get_sends_no_auth_header_by_default(mock_urlopen):
     mock_urlopen.return_value = _fake_response(b'{"inverters": []}')
     client = OpenDTUClient("http://192.168.1.50")
-    client.get_live_power_w()
+    client.get_live_power_w(["123"])
 
     sent_request = mock_urlopen.call_args[0][0]
     assert sent_request.get_header("Authorization") is None
@@ -45,7 +45,7 @@ def test_post_also_sends_basic_auth_header(mock_urlopen):
 def test_username_without_password_still_authenticates(mock_urlopen):
     mock_urlopen.return_value = _fake_response(b'{"inverters": []}')
     client = OpenDTUClient("http://192.168.1.50", username="admin", password=None)
-    client.get_live_power_w()
+    client.get_live_power_w(["123"])
 
     sent_request = mock_urlopen.call_args[0][0]
     assert sent_request.get_header("Authorization") == "Basic YWRtaW46"

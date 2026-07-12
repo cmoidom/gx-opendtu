@@ -158,6 +158,15 @@ class BatteryFullHysteresis:
     reaches activate_at_pct, and OFF only once it drops below
     deactivate_below_pct -- a dead zone between the two thresholds prevents
     flapping on/off as SOC drifts around either boundary during the day.
+
+    Also activates early -- without waiting for soc_pct to reach
+    activate_at_pct exactly -- if real grid export is observed while SOC is
+    already at or above deactivate_below_pct: that's empirical proof the
+    battery can no longer absorb the AC-coupled PV surplus, regardless of
+    what the SOC estimate says (SOC reporting can lag reality, especially
+    near full on a flat-voltage-curve chemistry like LFP; it also handles a
+    latch that reset to inactive on a service restart while the battery was
+    already full). Disabled by export_confirms_full_w <= 0.
     """
 
     def __init__(
@@ -165,15 +174,24 @@ class BatteryFullHysteresis:
         activate_at_pct: float = 100.0,
         deactivate_below_pct: float = 98.0,
         active: bool = False,
+        export_confirms_full_w: float = 50.0,
     ):
         self.activate_at_pct = activate_at_pct
         self.deactivate_below_pct = deactivate_below_pct
         self.active = active
+        self.export_confirms_full_w = export_confirms_full_w
 
-    def update(self, soc_pct: float) -> bool:
+    def update(self, soc_pct: float, grid_power_w: Optional[float] = None) -> bool:
         if self.active:
             if soc_pct < self.deactivate_below_pct:
                 self.active = False
         elif soc_pct >= self.activate_at_pct:
+            self.active = True
+        elif (
+            self.export_confirms_full_w > 0
+            and grid_power_w is not None
+            and grid_power_w <= -self.export_confirms_full_w
+            and soc_pct >= self.deactivate_below_pct
+        ):
             self.active = True
         return self.active

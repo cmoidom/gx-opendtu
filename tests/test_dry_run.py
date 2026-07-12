@@ -19,7 +19,7 @@ class FakeOpenDTUClient:
         self.absolute_calls = []
         self.relative_calls = []
 
-    def get_live_power_w(self):
+    def get_live_power_w(self, serials=None):
         if self._live_power_error:
             raise OpenDTUError("simulated failure")
         return dict(self._live_power_w)

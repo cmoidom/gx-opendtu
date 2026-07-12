@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 # limit_type values, see OpenDTU ActivePowerControlCommand.h. Persistent
 # variants write to inverter flash and are deliberately not exposed here -
@@ -91,16 +91,27 @@ class OpenDTUClient:
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             raise OpenDTUError(f"POST {url} failed: {exc}") from exc
 
-    def get_live_power_w(self) -> Dict[str, float]:
-        """Returns {serial: current_ac_power_w} for every reachable inverter."""
-        data = self._get("/api/livedata/status")
+    def get_live_power_w(self, serials: Iterable[str]) -> Dict[str, float]:
+        """Returns {serial: current_ac_power_w} for the given inverters.
+
+        The bare GET /api/livedata/status (no query string) deliberately
+        omits per-inverter AC/DC channel data -- it only ever returns
+        serial/name/reachability/limit summaries plus a system-wide total,
+        confirmed against OpenDTU's own docs and a live install (a serial
+        genuinely producing 700+W read back as 0 through the bare
+        endpoint). Only /api/livedata/status?inv=<serial> includes the
+        "AC" breakdown this needs, hence one request per inverter here.
+        """
         result: Dict[str, float] = {}
-        for inv in data.get("inverters", []):
-            serial = str(inv.get("serial"))
-            ac = inv.get("AC", {})
-            channel0 = ac.get("0", ac)
-            power_node = channel0.get("Power") if isinstance(channel0, dict) else None
-            result[serial] = _extract_value(power_node)
+        for serial in serials:
+            data = self._get(f"/api/livedata/status?inv={urllib.parse.quote(str(serial))}")
+            for inv in data.get("inverters", []):
+                if str(inv.get("serial")) != str(serial):
+                    continue
+                ac = inv.get("AC", {})
+                channel0 = ac.get("0", ac)
+                power_node = channel0.get("Power") if isinstance(channel0, dict) else None
+                result[str(serial)] = _extract_value(power_node)
         return result
 
     def list_inverters(self) -> List[InverterInfo]:

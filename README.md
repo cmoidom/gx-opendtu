@@ -95,8 +95,15 @@ un avertissement quand ça arrive, avec une valeur suggérée pour ce cycle
 Pour activer la priorité de charge batterie, passer `battery.enabled` à
 `true` (désactivé par défaut, comportement inchangé sinon) :
 ```json
-"battery": { "enabled": true, "activate_at_pct": 100, "deactivate_below_pct": 98 }
+"battery": { "enabled": true, "activate_at_pct": 100, "deactivate_below_pct": 98, "export_confirms_full_w": 50 }
 ```
+
+`export_confirms_full_w` (défaut 50W) : passe en régulation ON dès qu'un
+export réseau réel d'au moins cette puissance est observé alors que le SOC
+est déjà `>= deactivate_below_pct` — preuve empirique que la batterie ne
+peut plus absorber le surplus, sans attendre que le SOC atteigne
+`activate_at_pct` pile (utile si le SOC plafonne à 99% ou après un
+redémarrage qui a réinitialisé le mode). Mettre `0` pour désactiver.
 
 ### Page web de configuration
 

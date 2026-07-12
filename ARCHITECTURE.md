@@ -66,8 +66,13 @@ Deux cadences découplées, exécutées dans une seule boucle Python
 (`src/main.py`), pas de threads :
 
 - **Lecture** (`grid.read_interval_s`, défaut 2 s) : lit `/Ac/Power`, alimente
-  une moyenne glissante (`GridPowerSmoother`, `grid.smoothing_samples`
-  échantillons) pour amortir le bruit de mesure.
+  un filtre exponentiel (`GridPowerSmoother`, `filtered += ema_alpha *
+  (raw - filtered)`, `grid.ema_alpha` défaut 0,5) pour amortir le bruit de
+  mesure sans ajouter la discontinuité qu'une moyenne mobile à fenêtre fixe
+  provoque quand un vieil échantillon en sort brutalement. `ema_alpha` plus
+  haut = réaction plus rapide à un vrai à-coup de charge (au prix de plus de
+  bruit résiduel) ; plus bas = plus lisse mais plus lent. Constante de temps
+  approximative : `read_interval_s / ema_alpha` (≈4 s avec les défauts).
 - **Décision** (`control.decision_interval_s`, défaut 5 s) : c'est le seul
   moment où des requêtes HTTP peuvent partir vers OpenDTU.
 
@@ -86,6 +91,9 @@ suivre : le logiciel n'est donc jamais le goulot d'étranglement en pratique,
 et l'accélérer n'aurait aucun effet réel sur la vitesse de réaction. La
 marge `export_setpoint_w` (+30 W par défaut) absorbe sans risque le délai
 d'ajustement de production lors d'un à-coup de charge — c'est son rôle.
+Le `ema_alpha` par défaut (0,5, ≈4 s de constante de temps) est choisi pour
+que le filtre lui-même n'ajoute pas de retard significatif au-dessus de ce
+plancher matériel — il ne le fera pas disparaître pour autant.
 Source: discussion communautaire OpenDTU-OnBattery #908 (deux mesures
 indépendantes convergentes) ; un rapport isolé (issue OpenDTU #571)
 évoquait une asymétrie montée/descente mais n'est pas corroboré et est

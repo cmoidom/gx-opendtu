@@ -7,13 +7,33 @@ from src.controller import (
 )
 
 
-def test_grid_power_smoother_averages_last_n_samples():
-    smoother = GridPowerSmoother(samples=3)
+def test_grid_power_smoother_first_sample_is_passed_through():
+    smoother = GridPowerSmoother(alpha=0.5)
+    assert smoother.add(100) == 100.0
+
+
+def test_grid_power_smoother_applies_exponential_moving_average():
+    smoother = GridPowerSmoother(alpha=0.5)
     smoother.add(100)
-    smoother.add(200)
-    assert smoother.add(300) == 200.0
-    # a 4th sample should push the oldest (100) out of the window
-    assert smoother.add(0) == (200 + 300 + 0) / 3
+    # filtered = 100 + 0.5*(200-100) = 150
+    assert smoother.add(200) == 150.0
+    # filtered = 150 + 0.5*(0-150) = 75
+    assert smoother.add(0) == 75.0
+
+
+def test_grid_power_smoother_alpha_one_tracks_raw_value_instantly():
+    smoother = GridPowerSmoother(alpha=1.0)
+    smoother.add(100)
+    assert smoother.add(500) == 500.0
+
+
+def test_grid_power_smoother_rejects_invalid_alpha():
+    for bad_alpha in (0, -0.1, 1.1):
+        try:
+            GridPowerSmoother(alpha=bad_alpha)
+            assert False, f"expected ValueError for alpha={bad_alpha}"
+        except ValueError:
+            pass
 
 
 def test_quantize_rounds_to_nearest_step():

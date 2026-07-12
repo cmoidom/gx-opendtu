@@ -6,7 +6,6 @@ real D-Bus grid meter and OpenDTU HTTP client by main.py.
 
 from __future__ import annotations
 
-from collections import deque
 from typing import Dict, Optional
 
 
@@ -15,20 +14,32 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 class GridPowerSmoother:
-    """Moving average over the last N grid power samples, to damp measurement noise."""
+    """Exponential moving average over grid power readings, to damp
+    measurement noise without adding the step-discontinuity a fixed-window
+    moving average has when an old sample drops out of the window.
 
-    def __init__(self, samples: int):
-        self._samples: deque = deque(maxlen=max(1, samples))
+    filtered += alpha * (raw - filtered). Higher alpha reacts faster to a
+    genuine load step (at the cost of passing through more noise); lower
+    alpha is smoother but slower. Tune based on read_interval_s: the time
+    constant is roughly read_interval_s / alpha.
+    """
+
+    def __init__(self, alpha: float):
+        if not 0 < alpha <= 1:
+            raise ValueError("alpha must be in (0, 1]")
+        self.alpha = alpha
+        self._filtered: Optional[float] = None
 
     def add(self, watts: float) -> float:
-        self._samples.append(watts)
-        return self.average
+        if self._filtered is None:
+            self._filtered = watts
+        else:
+            self._filtered += self.alpha * (watts - self._filtered)
+        return self._filtered
 
     @property
     def average(self) -> float:
-        if not self._samples:
-            return 0.0
-        return sum(self._samples) / len(self._samples)
+        return self._filtered if self._filtered is not None else 0.0
 
 
 class PIController:

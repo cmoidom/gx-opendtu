@@ -5,7 +5,7 @@
   "grid": {
     "export_setpoint_w": 30,
     "read_interval_s": 2,
-    "smoothing_samples": 3,
+    "ema_alpha": 0.5,
     "source": "dbus"
   },
   "control": {

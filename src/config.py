@@ -23,7 +23,10 @@ class ModbusGridConfig:
 class GridConfig:
     export_setpoint_w: float = 30.0
     read_interval_s: float = 2.0
-    smoothing_samples: int = 3
+    # EMA filter coefficient for grid power (0, 1]. Higher = faster reaction
+    # to a genuine load step, at the cost of passing through more noise.
+    # Time constant is roughly read_interval_s / ema_alpha.
+    ema_alpha: float = 0.5
     # "dbus": read locally, only works when running directly on the Cerbo GX.
     # "modbus": read over the network (Modbus TCP), for running off-device
     # (e.g. a separate Linux VM) - requires grid.modbus.host below.
@@ -120,7 +123,7 @@ def parse_config(raw: dict) -> AppConfig:
         grid=GridConfig(
             export_setpoint_w=float(grid_raw.get("export_setpoint_w", 30.0)),
             read_interval_s=float(grid_raw.get("read_interval_s", 2.0)),
-            smoothing_samples=int(grid_raw.get("smoothing_samples", 3)),
+            ema_alpha=float(grid_raw.get("ema_alpha", 0.5)),
             source=grid_source,
             modbus=modbus_cfg,
         ),

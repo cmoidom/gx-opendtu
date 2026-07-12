@@ -135,7 +135,7 @@ def run(config: AppConfig, dry_run: bool = False) -> None:
         else None
     )
     client = OpenDTUClient(config.opendtu.base_url)
-    smoother = GridPowerSmoother(config.grid.smoothing_samples)
+    smoother = GridPowerSmoother(config.grid.ema_alpha)
     controller = SoftTargetController(
         export_setpoint_w=config.grid.export_setpoint_w,
         kp=config.control.kp,

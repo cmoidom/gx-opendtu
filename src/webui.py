@@ -400,7 +400,8 @@ def _render_dashboard_page() -> str:
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--gridline); }
   th { color: var(--text-secondary); font-weight: 600; }
-  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  th.num, td.num, th.center, td.center { text-align: center; }
+  td.num { font-variant-numeric: tabular-nums; }
   .hint { color: var(--muted); font-size: 0.82rem; }
   #tooltip { position: fixed; display: none; background: var(--text-primary); color: var(--surface-1);
              font-size: 0.78rem; padding: 0.35rem 0.55rem; border-radius: 6px; pointer-events: none;
@@ -470,7 +471,7 @@ synchronise sur les trois graphiques temporels.</p>
 
 <h2>Detail par onduleur</h2>
 <table id="inverters-table">
-  <thead><tr><th>Serie</th><th class="num">Puissance</th><th class="num">Limite</th><th class="num">Nominale</th><th>Etat</th></tr></thead>
+  <thead><tr><th>Serie</th><th class="num">Puissance</th><th class="num">Limite</th><th class="num">Nominale</th><th class="center">Etat</th></tr></thead>
   <tbody></tbody>
 </table>
 <p class="hint">Pendant la charge batterie prioritaire (regulation OFF), "Limite" affiche
@@ -916,7 +917,7 @@ function renderInverterTable(latest) {
     '<td class="num">' + fmtW(inv.actual_w) + '</td>' +
     '<td class="num">' + fmtPct(inv.limit_relative_pct) + '</td>' +
     '<td class="num">' + fmtW(inv.max_power_w) + '</td>' +
-    '<td>' + (inv.acknowledged === false ? 'en attente (RF)' :
+    '<td class="center">' + (inv.acknowledged === false ? 'en attente (RF)' :
                inv.acknowledged === null ? 'debride (charge batterie)' : 'ok') + '</td></tr>';
   }).join('');
 }

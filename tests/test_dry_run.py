@@ -1,5 +1,11 @@
 from src.controller import CapacityEstimator, SoftTargetController
-from src.main import _apply_failsafe, _decision_cycle, _off_state_inverters_payload, _release_for_charging
+from src.main import (
+    _apply_failsafe,
+    _decision_cycle,
+    _min_inverter_floor_warning,
+    _off_state_inverters_payload,
+    _release_for_charging,
+)
 from src.opendtu_client import LimitStatus, OpenDTUError
 
 
@@ -168,3 +174,73 @@ def test_verbose_traces_false_suppresses_state_line(caplog):
             verbose_traces=False,
         )
     assert not any("grid_meter=" in r.message for r in caplog.records)
+
+
+def test_floor_warning_fires_when_floor_exceeds_target_while_exporting():
+    warning, recommended = _min_inverter_floor_warning(
+        min_inverter_pct=10.0,
+        grid_power_avg_w=-50.0,  # exporting
+        target_w=0.0,
+        allocation={"a": 60.0, "b": 60.0},  # floored to 10% of 600W each
+        ceilings_w={"a": 600.0, "b": 600.0},
+        nominal_power_w={"a": 600.0, "b": 600.0},
+        serials=["a", "b"],
+    )
+    assert warning is True
+    assert recommended == 0.0  # target was 0, so 0% would not have exceeded it
+
+
+def test_floor_warning_recommends_nonzero_pct_when_target_is_partway():
+    warning, recommended = _min_inverter_floor_warning(
+        min_inverter_pct=10.0,
+        grid_power_avg_w=-20.0,
+        target_w=60.0,  # controller wanted 60W total
+        allocation={"a": 60.0, "b": 60.0},  # floor still bumped b up from a lower share
+        ceilings_w={"a": 600.0, "b": 600.0},
+        nominal_power_w={"a": 600.0, "b": 600.0},
+        serials=["a", "b"],
+    )
+    assert warning is True
+    assert recommended == 5.0  # 60W / 1200W nominal = 5%
+
+
+def test_floor_warning_silent_when_not_exporting():
+    warning, recommended = _min_inverter_floor_warning(
+        min_inverter_pct=10.0,
+        grid_power_avg_w=30.0,  # importing, not exporting
+        target_w=0.0,
+        allocation={"a": 60.0, "b": 60.0},
+        ceilings_w={"a": 600.0, "b": 600.0},
+        nominal_power_w={"a": 600.0, "b": 600.0},
+        serials=["a", "b"],
+    )
+    assert warning is False
+    assert recommended is None
+
+
+def test_floor_warning_silent_when_floor_did_not_exceed_target():
+    warning, recommended = _min_inverter_floor_warning(
+        min_inverter_pct=10.0,
+        grid_power_avg_w=-5.0,
+        target_w=200.0,  # target already well above the floor
+        allocation={"a": 100.0, "b": 100.0},
+        ceilings_w={"a": 600.0, "b": 600.0},
+        nominal_power_w={"a": 600.0, "b": 600.0},
+        serials=["a", "b"],
+    )
+    assert warning is False
+    assert recommended is None
+
+
+def test_floor_warning_disabled_when_min_inverter_pct_is_zero():
+    warning, recommended = _min_inverter_floor_warning(
+        min_inverter_pct=0.0,
+        grid_power_avg_w=-50.0,
+        target_w=0.0,
+        allocation={"a": 0.0, "b": 0.0},
+        ceilings_w={"a": 600.0, "b": 600.0},
+        nominal_power_w={"a": 600.0, "b": 600.0},
+        serials=["a", "b"],
+    )
+    assert warning is False
+    assert recommended is None

@@ -372,6 +372,11 @@ def _render_dashboard_page() -> str:
   .tile .value { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
   .tile .value.on { color: var(--good); }
   .tile .value.off { color: var(--warning); }
+  .banner { padding: 0.6rem 0.9rem; border-radius: 8px; margin-bottom: 0.8rem; font-size: 0.88rem; }
+  .banner.warning { background: #fdf0d5; border: 1px solid var(--warning); color: #0b0b0b; }
+  @media (prefers-color-scheme: dark) {
+    .banner.warning { background: #3a2f14; color: #ffffff; }
+  }
   .chart-box { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
                padding: 0.8rem; margin-bottom: 1rem; position: relative; }
   .chart-box canvas { width: 100%; height: 200px; display: block; }
@@ -400,6 +405,8 @@ def _render_dashboard_page() -> str:
 </p>
 <p class="hint">Molette pour zoomer, glisser pour deplacer, double-clic pour reinitialiser --
 synchronise sur les trois graphiques temporels.</p>
+
+<div id="floor-warning" class="banner warning" style="display:none"></div>
 
 <div class="tiles" id="tiles"></div>
 
@@ -807,6 +814,18 @@ function renderTiles(latest) {
     (latest.battery_power_w !== null && latest.battery_power_w !== undefined ? '<div class="tile"><div class="label">Puissance batterie</div><div class="value">' + fmtW(latest.battery_power_w) + '</div></div>' : '') +
     '<div class="tile"><div class="label">Regulation</div><div class="value ' + (on ? 'on' : 'off') + '">' + (latest.injection_control || '-') + '</div></div>' +
     (on ? '<div class="tile"><div class="label">Consigne totale</div><div class="value">' + fmtW(latest.consigne_w) + '</div></div>' : '');
+
+  const warningBox = document.getElementById('floor-warning');
+  if (latest.min_inverter_floor_warning) {
+    warningBox.style.display = '';
+    const rec = latest.recommended_min_inverter_pct;
+    warningBox.innerHTML = '&#9888; Le seuil mini onduleur provoque une injection reseau ce cycle. ' +
+      (rec !== null && rec !== undefined
+        ? 'Valeur qui aurait evite cela maintenant : <strong>' + rec + ' %</strong> (calcul instantane, va fluctuer -- baisser progressivement si ca persiste).'
+        : 'Envisager de le reduire dans la configuration.');
+  } else {
+    warningBox.style.display = 'none';
+  }
 }
 
 function renderInverterTable(latest) {

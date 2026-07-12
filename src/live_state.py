@@ -31,6 +31,8 @@ class LiveState:
         self._injection_control: Optional[str] = None
         self._consigne_w: Optional[float] = None
         self._inverters: List[dict] = []
+        self._min_inverter_floor_warning: bool = False
+        self._recommended_min_inverter_pct: Optional[float] = None
 
     def update_decision(
         self,
@@ -39,6 +41,8 @@ class LiveState:
         consigne_w: Optional[float],
         inverters: List[dict],
         battery_power_w: Optional[float] = None,
+        min_inverter_floor_warning: bool = False,
+        recommended_min_inverter_pct: Optional[float] = None,
     ) -> None:
         """Called once per decision cycle (control.decision_interval_s) --
         carried forward into every grid sample recorded until the next one."""
@@ -48,6 +52,8 @@ class LiveState:
             self._injection_control = injection_control
             self._consigne_w = consigne_w
             self._inverters = list(inverters)
+            self._min_inverter_floor_warning = min_inverter_floor_warning
+            self._recommended_min_inverter_pct = recommended_min_inverter_pct
 
     def record_grid(self, grid_raw_w: float, grid_ema_w: float) -> None:
         """Called once per fast-loop tick (grid.read_interval_s) -- this is
@@ -62,6 +68,8 @@ class LiveState:
                 "injection_control": self._injection_control,
                 "consigne_w": self._consigne_w,
                 "inverters": self._inverters,
+                "min_inverter_floor_warning": self._min_inverter_floor_warning,
+                "recommended_min_inverter_pct": self._recommended_min_inverter_pct,
             }
             self._history.append(sample)
 

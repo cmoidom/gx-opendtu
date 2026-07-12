@@ -77,12 +77,20 @@ puissance nominale de chaque onduleur, gains PI, paliers) — voir
 `ARCHITECTURE.md` pour la signification de chaque paramètre.
 
 `control.min_inverter_pct` (défaut 10%) : seuil plancher global, en % de la
-puissance nominale de chacun — un onduleur qui produit n'est jamais commandé
-sous ce seuil (certains micro-onduleurs ne régulent pas de façon fiable près
-de 0). Mettre `0` pour désactiver. N'affecte jamais un arrêt complet
-(fail-safe à 0%, ou déblocage à 100% pendant la charge batterie
-prioritaire) — seulement une part non nulle mais trop faible calculée par
-le water-filling.
+puissance nominale de chacun — un onduleur qui a de la capacité réelle
+disponible (du soleil) n'est jamais commandé sous ce seuil, même si le
+régulateur PI calcule une consigne totale de 0W (typiquement quand le
+réseau exporte déjà légèrement sans l'aide de ces onduleurs). Mettre `0`
+pour désactiver. N'affecte jamais un arrêt complet piloté ailleurs
+(fail-safe à 0%, déblocage à 100% pendant la charge batterie prioritaire —
+ces deux chemins ne passent pas par le water-filling).
+
+**Ce seuil est prioritaire sur le zero-export strict** : s'il est réglé
+plus haut que le vrai besoin du moment, il peut causer une injection réseau
+réelle plutôt que d'être ignoré silencieusement. Le tableau de bord affiche
+un avertissement quand ça arrive, avec une valeur suggérée pour ce cycle
+(calcul instantané, à baisser progressivement si l'avertissement persiste)
+— voir la section [Tableau de bord temps réel](#tableau-de-bord-temps-réel).
 
 Pour activer la priorité de charge batterie, passer `battery.enabled` à
 `true` (désactivé par défaut, comportement inchangé sinon) :
@@ -131,6 +139,9 @@ le port 8080 : `http://<ip-du-service>:8080/`.
 Sur le même serveur web, `http://<ip-du-service>:8080/dashboard` affiche
 l'état courant du pilotage sans avoir à lire les logs :
 
+- Bandeau d'avertissement si `control.min_inverter_pct` cause une injection
+  réseau réelle ce cycle, avec une valeur suggérée (voir section
+  Configuration).
 - Tuiles : puissance réseau brute et EMA, SOC et puissance batterie (si
   activé), état `injection_control` (ON/OFF), consigne totale.
 - Trois graphiques (mise à jour toutes les 2 s, ~30 min d'historique

@@ -89,6 +89,29 @@ def _decision_cycle(
         for serial, watts in allocation.items():
             client.set_absolute_limit_w(serial, watts)
 
+    floor_warning, recommended_min_inverter_pct = _min_inverter_floor_warning(
+        min_inverter_pct,
+        grid_power_avg_w,
+        decision.target_w,
+        allocation,
+        capacity.ceilings_w,
+        capacity.nominal_power_w,
+        serials,
+    )
+    if floor_warning:
+        # Always logged (unlike the verbose_traces-gated line below): the
+        # floor is doing exactly what config.control.min_inverter_pct asked
+        # for, but if this fires often the configured value is probably
+        # higher than this install's real demand right now.
+        log.warning(
+            "min_inverter_pct=%.0f%% causing grid export this cycle (grid_ema=%+.0fW, consigne=%.0fW) "
+            "-- valeur qui n'aurait pas depasse la consigne ce cycle: %.1f%%",
+            min_inverter_pct,
+            grid_power_avg_w,
+            decision.target_w,
+            recommended_min_inverter_pct if recommended_min_inverter_pct is not None else 0.0,
+        )
+
     if live_state is not None:
         live_state.update_decision(
             soc_pct,
@@ -109,6 +132,8 @@ def _decision_cycle(
                 for serial in serials
             ],
             battery_power_w=battery_power_w,
+            min_inverter_floor_warning=floor_warning,
+            recommended_min_inverter_pct=recommended_min_inverter_pct,
         )
 
     # Logs full state every cycle (not just on change) for debug visibility
@@ -139,6 +164,36 @@ def _decision_cycle(
             actual_w=live_power_w.get(serial, 0.0),
             limit_acknowledged=status.acknowledged if status else True,
         )
+
+
+def _min_inverter_floor_warning(
+    min_inverter_pct: float,
+    grid_power_avg_w: float,
+    target_w: float,
+    allocation: Dict[str, float],
+    ceilings_w: Dict[str, float],
+    nominal_power_w: Dict[str, float],
+    serials: Iterable[str],
+) -> "tuple[bool, Optional[float]]":
+    """Detects the min_inverter_pct floor pushing the total allocation above
+    what the controller actually wanted while the grid is exporting -- a
+    sign the configured floor is higher than this install's real demand
+    right now (config.control.min_inverter_pct is authoritative regardless,
+    see ARCHITECTURE.md -- this is purely informational).
+
+    recommended_pct is the largest floor that would NOT have exceeded this
+    cycle's target, given the nominal power of inverters that currently
+    have real capacity -- a live, instantaneous suggestion (will fluctuate
+    cycle to cycle), not a universal fixed value."""
+    if min_inverter_pct <= 0 or grid_power_avg_w >= 0:
+        return False, None
+    serials = list(serials)
+    total_allocated_w = sum(allocation.get(s, 0.0) for s in serials)
+    if total_allocated_w <= target_w + 1e-6:
+        return False, None
+    capacity_w = sum(nominal_power_w.get(s, 0.0) for s in serials if ceilings_w.get(s, 0.0) > 0)
+    recommended_pct = round(max(0.0, target_w) / capacity_w * 100.0, 1) if capacity_w > 0 else 0.0
+    return True, recommended_pct
 
 
 def _off_state_inverters_payload(

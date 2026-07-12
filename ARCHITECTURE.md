@@ -287,15 +287,30 @@ dépasser.
 
 `min_inverter_pct` (`config.control.min_inverter_pct`, défaut 10%) est
 appliqué en post-traitement sur le dict `allocation` retourné : pour
-chaque onduleur dont la part est `> 0` (donc censé produire, pas un arrêt
-volontaire), on relève à `min(capacity_estimates[serial], min_inverter_pct%
-* nominal_power_w[serial])` si cette part était plus basse. Le calcul est
-uniforme pour les entrées saturées comme non saturées (`min(cap, max(w,
-floor))` ne change rien pour une entrée déjà à son plafond, la clause
-`min(...)` protège juste de dépasser un plafond abaissé par l'ombrage).
-`total_target_w == 0` donne `share == 0` pour tous, donc jamais concerné --
-c'est ce qui permet au fail-safe et au déblocage à 100% de rester
-inchangés sans logique séparée.
+chaque onduleur ayant une capacité réelle (`capacity_estimates[serial] > 0`
+-- donc pas nuit/ombrage total), on relève à `min(capacity_estimates[serial],
+min_inverter_pct% * nominal_power_w[serial])` si sa part calculée était
+plus basse -- **y compris quand cette part est exactement 0**, tant qu'il y
+a de la capacité. La config est prioritaire : ce plancher peut donc causer
+une injection réseau réelle si `total_target_w` calculé par le PI est plus
+bas que ce que le plancher impose (typiquement quand le réseau exporte déjà
+légèrement sans l'aide des onduleurs gérés). Fail-safe et le déblocage à
+100% pendant la charge batterie prioritaire ne passent pas par
+`water_fill_allocate` du tout (`set_relative_limit_pct` direct), donc ce
+plancher ne les concerne jamais -- il n'y a pas de "vrai zéro" à protéger
+dans cette fonction.
+
+`main._min_inverter_floor_warning` détecte ce cas après coup (pas dans
+`allocator.py`, qui reste pure logique d'allocation sans connaissance du
+contexte réseau) : `min_inverter_pct > 0`, réseau en export
+(`grid_power_avg_w < 0`), et total alloué strictement supérieur à
+`decision.target_w`. `recommended_pct` = le plus grand pourcentage qui
+n'aurait pas dépassé la consigne de ce cycle précis
+(`target_w / capacité_nominale_disponible * 100`) -- une valeur informative
+et instantanée (fluctue à chaque cycle), pas une recommandation figée.
+Toujours logué en `WARNING` (indépendant de `verbose_traces`) et exposé au
+tableau de bord via `LiveState` (`min_inverter_floor_warning`,
+`recommended_min_inverter_pct`), affiché en bandeau tant que actif.
 
 ## API OpenDTU utilisée
 

@@ -46,11 +46,26 @@ def test_min_inverter_pct_floors_a_low_nonzero_share():
     assert allocation == {"a": 60.0, "b": 60.0}
 
 
-def test_min_inverter_pct_never_overrides_a_genuine_zero():
+def test_min_inverter_pct_applies_even_when_target_is_zero():
+    # Config is authoritative: if the controller wants zero net contribution
+    # (e.g. the grid is already at/below setpoint without these inverters'
+    # help) but real capacity is available, the floor still holds -- this
+    # can cause real export, which is why main._decision_cycle raises a
+    # warning for the dashboard rather than silently skipping the floor.
     allocation = water_fill_allocate(
         0.0, ["a", "b"], {"a": 600, "b": 600}, min_inverter_pct=10.0, nominal_power_w={"a": 600, "b": 600}
     )
-    assert allocation == {"a": 0.0, "b": 0.0}
+    assert allocation == {"a": 60.0, "b": 60.0}
+
+
+def test_min_inverter_pct_stays_zero_with_no_real_capacity():
+    # capacity_estimates == 0 means genuinely irradiance-limited to zero
+    # (fail-safe/battery-release don't go through this function at all) --
+    # the floor must never force a positive limit an inverter can't use.
+    allocation = water_fill_allocate(
+        0.0, ["a", "b"], {"a": 0, "b": 600}, min_inverter_pct=10.0, nominal_power_w={"a": 600, "b": 600}
+    )
+    assert allocation == {"a": 0.0, "b": 60.0}
 
 
 def test_min_inverter_pct_never_exceeds_capacity_ceiling():

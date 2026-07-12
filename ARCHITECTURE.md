@@ -100,6 +100,19 @@ contrainte "pas d'accès internet garanti" que le reste du projet). L'état
 est perdu à chaque redémarrage du service (y compris via "Enregistrer et
 appliquer") : c'est une vue en direct, pas un historique persistant.
 
+Quand `injection_control=OFF` (charge batterie prioritaire), `main.run()`
+n'appelle pas `_decision_cycle` -- il n'y a donc pas d'allocation/limite à
+reporter. Plutôt que de laisser `inverters=[]` (graphique et tableau vides
+en permanence tout le temps que dure la charge, ce qui ressemble à une
+panne), `_off_state_inverters_payload` (`src/main.py`) lit quand même
+`client.get_live_power_w()` et construit une entrée par onduleur avec
+`allocated_w=None` et `acknowledged=None` (pas de commande active à
+rapporter) mais `actual_w` réel et `limit_relative_pct=100` (débridé) --
+`webui.py` affiche ces `None` comme "débridé (charge batterie)" plutôt que
+de les confondre avec `acknowledged=False` ("en attente RF") ou un état
+"ok" normal. Un échec de cette lecture (`OpenDTUError`) redonne `[]` sans
+perturber la boucle de déblocage à 100%, qui reste la priorité.
+
 Les graduations de l'axe Y de chaque graphique utilisent l'algorithme
 "nice numbers" de Heckbert (`niceNum`/`niceScale` dans `webui.py`) : le pas
 et les bornes sont toujours arrondis à 1/2/5 x 10^n (50, 100, 200, 500...),

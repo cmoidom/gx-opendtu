@@ -127,6 +127,31 @@ def _decision_cycle(
         )
 
 
+def _off_state_inverters_payload(
+    client: OpenDTUClient, serials: Iterable[str], nominal_power_w: Dict[str, float]
+) -> list:
+    """Live per-inverter power for the dashboard while injection control is
+    OFF (charge batterie prioritaire): inverters are uncapped, so there is
+    no allocated/limit-status data to report, but the actual measured power
+    is still meaningful and otherwise leaves the dashboard looking empty/
+    broken during the whole charge-priority window."""
+    try:
+        live_power_w = client.get_live_power_w()
+    except OpenDTUError:
+        return []
+    return [
+        {
+            "serial": serial,
+            "allocated_w": None,
+            "actual_w": live_power_w.get(serial, 0.0),
+            "limit_relative_pct": 100,
+            "max_power_w": nominal_power_w.get(serial, 0.0),
+            "acknowledged": None,
+        }
+        for serial in serials
+    ]
+
+
 def _release_for_charging(client: OpenDTUClient, serials: Iterable[str], dry_run: bool = False) -> None:
     """Battery not yet full: release curtailment so PV runs uncapped and the
     Victron ESS/battery charger absorbs the surplus by charging."""
@@ -221,7 +246,9 @@ def run(config: AppConfig, dry_run: bool = False, live_state: Optional[LiveState
                 if not released_for_charging:
                     _release_for_charging(client, serials, dry_run=dry_run)
                     released_for_charging = True
-                live_state.update_decision(soc_pct, "OFF", None, [])
+                live_state.update_decision(
+                    soc_pct, "OFF", None, _off_state_inverters_payload(client, serials, nominal_power_w)
+                )
                 if config.logging.verbose_traces:
                     log.info(
                         "%ssoc=%.0f%% grid_meter=%+.0fW ema=%+.0fW injection_control=OFF (charge batterie prioritaire)%s",

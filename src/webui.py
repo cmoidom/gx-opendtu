@@ -399,7 +399,8 @@ def _render_dashboard_page() -> str:
   <thead><tr><th>Serie</th><th class="num">Puissance</th><th class="num">Limite</th><th class="num">Nominale</th><th>Etat</th></tr></thead>
   <tbody></tbody>
 </table>
-<p class="hint">Vide pendant la charge batterie prioritaire (onduleurs debloques a 100%, pas de commande active).</p>
+<p class="hint">Pendant la charge batterie prioritaire (regulation OFF), "Limite" affiche
+100% (debride) et "Puissance" la production reelle mesuree -- ce n'est pas une commande active.</p>
 
 <div id="tooltip"></div>
 
@@ -583,7 +584,8 @@ function renderInverterTable(latest) {
     '<td class="num">' + fmtW(inv.actual_w) + '</td>' +
     '<td class="num">' + fmtPct(inv.limit_relative_pct) + '</td>' +
     '<td class="num">' + fmtW(inv.max_power_w) + '</td>' +
-    '<td>' + (inv.acknowledged === false ? 'en attente (RF)' : 'ok') + '</td></tr>'
+    '<td>' + (inv.acknowledged === false ? 'en attente (RF)' :
+               inv.acknowledged === null ? 'debride (charge batterie)' : 'ok') + '</td></tr>'
   ).join('');
 }
 

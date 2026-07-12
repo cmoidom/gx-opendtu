@@ -373,14 +373,31 @@ réel d'export prolongé si le default "pas sûr" (`False`) est faux.
 - `GET /api/limit/status` → `{serial: {limit_relative, max_power,
   limit_set_status}}`. `limit_set_status` passe `Pending` → `Ok` après
   acquittement RF (latence de quelques secondes, normal pour du sub-GHz).
+  Appelé à chaque cycle de décision (mode ON ou forçage manuel) et par le
+  bouton de découverte (`list_inverters`, pour `max_power` = puissance
+  nominale).
+- `GET /api/livedata/status` (sans `?inv=`) → utilisé **uniquement** par
+  `list_inverters` (bouton "Charger la liste depuis OpenDTU" sur la page de
+  config), pour `serial`/`name` de chaque onduleur détecté. C'est l'appel
+  qui, sans `?inv=`, ne renvoie jamais le détail AC/DC (voir plus haut) —
+  ici c'est volontaire, on n'a besoin que de serial/name à cet endroit.
 - `POST /api/limit/config`, form field `data=<json>` :
   `{"serial", "limit_type", "limit_value"}`. Seuls les types **non-persistants**
-  sont utilisés (`0` = absolu, `1` = relatif) — les variants persistants
-  écrivent en flash côté onduleur et useraient prématurément la mémoire avec
-  un asservissement aussi fréquent.
-- Pas d'authentification Basic dans cette installation (désactivée côté
-  OpenDTU). Si elle venait à être activée, il faudrait étendre
-  `OpenDTUClient` pour l'envoyer sur les requêtes GET/POST.
+  sont utilisés (`0` = absolu, `1` = relatif) — confirmé contre
+  `ActivePowerControlCommand.h` du dépôt officiel OpenDTU (l'énumération
+  `AbsolutNonPersistent, RelativNonPersistent, AbsolutPersistent,
+  RelativPersistent` donne 0/1 aux variantes non-persistantes, 2/3 -- ou
+  256/257 sur les séries HM plus anciennes -- aux persistantes, jamais
+  utilisées ici). Les variants persistants écrivent en flash côté onduleur
+  et useraient prématurément la mémoire avec un asservissement aussi
+  fréquent. Seul appel qui écrit réellement quelque chose (les trois
+  endpoints ci-dessus ne font que lire) -- et seulement quand la consigne
+  change, jamais à chaque tick (`decision.changed`, voir plus haut).
+- Basic Auth optionnelle (`config.opendtu.username`/`password`), envoyée
+  sur toutes les requêtes GET/POST dès qu'un `username` est renseigné (voir
+  section dédiée plus haut) -- nécessaire si l'option "Disable readonly
+  access" est activée côté OpenDTU, ce qui protège aussi les endpoints en
+  lecture ci-dessus.
 - ⚠️ Un changement de paramètres de `/api/limit/config` a été signalé sur
   certaines versions d'OpenDTU (2025-08-07) : vérifier le format exact contre
   la version réellement installée avant un déploiement.
